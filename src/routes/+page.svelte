@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { asset } from '$app/paths';
 	import { SequencerEngine } from '$lib/sequencer/engine.svelte';
 	import { createRow } from '$lib/sequencer/types';
 	import SequencerRow, { type OverlayKind } from '$lib/components/SequencerRow.svelte';
@@ -20,14 +21,38 @@
 	async function ensureLoaded() {
 		if (ready || loading) return;
 		loading = true;
-		await engine.addRow(createRow({ id: 'kick', name: 'Kick', sampleId: 'kick' }), '/samples/kick.wav');
-		await engine.addRow(createRow({ id: 'snare', name: 'Snare', sampleId: 'snare' }), '/samples/snare.wav');
-		await engine.addRow(createRow({ id: 'ch', name: 'Closed HH', sampleId: 'ch' }), '/samples/ch.wav');
-		await engine.addRow(createRow({ id: 'oh', name: 'Open HH', sampleId: 'oh' }), '/samples/oh.wav');
-		await engine.addRow(createRow({ id: 'clap', name: 'Clap', sampleId: 'clap' }), '/samples/clap.wav');
-		await engine.addRow(createRow({ id: 'shaker', name: 'Shaker', sampleId: 'shaker' }), '/samples/shaker.wav');
-		await engine.addRow(createRow({ id: 'cowbell', name: 'Cowbell', sampleId: 'cowbell' }), '/samples/cowbell.wav');
-		await engine.addRow(createRow({ id: 'crash', name: 'Crash', sampleId: 'crash' }), '/samples/crash.wav');
+		await engine.addRow(
+			createRow({ id: 'kick', name: 'Kick', sampleId: 'kick' }),
+			asset('/samples/kick.wav')
+		);
+		await engine.addRow(
+			createRow({ id: 'snare', name: 'Snare', sampleId: 'snare' }),
+			asset('/samples/snare.wav')
+		);
+		await engine.addRow(
+			createRow({ id: 'ch', name: 'Closed HH', sampleId: 'ch' }),
+			asset('/samples/ch.wav')
+		);
+		await engine.addRow(
+			createRow({ id: 'oh', name: 'Open HH', sampleId: 'oh' }),
+			asset('/samples/oh.wav')
+		);
+		await engine.addRow(
+			createRow({ id: 'clap', name: 'Clap', sampleId: 'clap' }),
+			asset('/samples/clap.wav')
+		);
+		await engine.addRow(
+			createRow({ id: 'shaker', name: 'Shaker', sampleId: 'shaker' }),
+			asset('/samples/shaker.wav')
+		);
+		await engine.addRow(
+			createRow({ id: 'cowbell', name: 'Cowbell', sampleId: 'cowbell' }),
+			asset('/samples/cowbell.wav')
+		);
+		await engine.addRow(
+			createRow({ id: 'crash', name: 'Crash', sampleId: 'crash' }),
+			asset('/samples/crash.wav')
+		);
 		ready = true;
 		loading = false;
 	}
@@ -53,7 +78,7 @@
 
 <div class="page">
 	<div class="header">
-		<img class="logo" src="/img/neonquaver.png" alt="EFDP Sequencer" />
+		<img class="logo" src={asset('/img/neonquaver.png')} alt="EFDP Sequencer" />
 		<button class="transport" onclick={toggle} disabled={loading}>
 			{#if loading}
 				Loading…

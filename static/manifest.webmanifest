@@ -1,14 +1,14 @@
 {
 	"name": "EFDP Sequencer",
 	"short_name": "EFDP",
-	"start_url": "/",
+	"start_url": ".",
 	"display": "standalone",
 	"orientation": "any",
 	"background_color": "#000525",
 	"theme_color": "#000525",
 	"icons": [
 		{
-			"src": "/img/neonquaver.png",
+			"src": "img/neonquaver.png",
 			"sizes": "192x192",
 			"type": "image/png"
 		}

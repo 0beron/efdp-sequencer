@@ -11,6 +11,13 @@ export interface Trigger {
 	// Normalized 0..1 chance the trigger actually fires each time it's reached.
 	// Defaults to 1 (always plays) so existing triggers behave as before.
 	probability: number;
+	// "Play on the nth pass out of every m" — a per-trigger counter (tracked by
+	// the engine, not stored here) advances every time this step is reached
+	// while active, cycling 1..m; the trigger only sounds (subject to
+	// probability) on the pass where the counter equals iterationN. Both
+	// default to 1 so existing triggers still play on every pass.
+	iterationN: number;
+	iterationM: number;
 }
 
 export interface Row {
@@ -63,7 +70,9 @@ export function createRow(options: {
 		triggers: Array.from({ length: length * subdivision }, () => ({
 			active: false,
 			velocity: 1,
-			probability: 1
+			probability: 1,
+			iterationN: 1,
+			iterationM: 1
 		})),
 		attack: 0,
 		decay: 1,
@@ -206,13 +215,47 @@ export function setProbability(row: Row, step: number, value: number, substep = 
 	if (trigger) trigger.probability = Math.min(1, Math.max(0, value));
 }
 
+export function getIterationN(row: Row, step: number, substep = 0): number {
+	return row.triggers[triggerIndex(row, step, substep)]?.iterationN ?? 1;
+}
+
+// Raising the play-on iteration past the current cycle length extends
+// iterationM to match, rather than silently clamping n back down - otherwise
+// the "increase n" control would go dead as soon as n reached m.
+export function setIterationN(row: Row, step: number, value: number, substep = 0): void {
+	const trigger = row.triggers[triggerIndex(row, step, substep)];
+	if (!trigger) return;
+	trigger.iterationN = Math.max(1, Math.round(value));
+	if (trigger.iterationN > trigger.iterationM) trigger.iterationM = trigger.iterationN;
+}
+
+export function getIterationM(row: Row, step: number, substep = 0): number {
+	return row.triggers[triggerIndex(row, step, substep)]?.iterationM ?? 1;
+}
+
+// Shrinking the cycle length below the current play-on iteration drags
+// iterationN down with it, same as a right-hand range handle pushing the left one.
+export function setIterationM(row: Row, step: number, value: number, substep = 0): void {
+	const trigger = row.triggers[triggerIndex(row, step, substep)];
+	if (!trigger) return;
+	trigger.iterationM = Math.max(1, Math.round(value));
+	if (trigger.iterationN > trigger.iterationM) trigger.iterationN = trigger.iterationM;
+}
+
 // Resize helpers preserve existing triggers where possible rather than discarding them,
 // since these will back the (not-yet-built) length/zoom controls.
 
 export function setLength(row: Row, newLength: number): void {
 	const newTriggers = Array.from(
 		{ length: newLength * row.subdivision },
-		(_, i) => row.triggers[i] ?? { active: false, velocity: 1, probability: 1 }
+		(_, i) =>
+			row.triggers[i] ?? {
+				active: false,
+				velocity: 1,
+				probability: 1,
+				iterationN: 1,
+				iterationM: 1
+			}
 	);
 	row.length = newLength;
 	row.triggers = newTriggers;
@@ -223,7 +266,9 @@ export function setSubdivision(row: Row, newSubdivision: number): void {
 	const newTriggers = Array.from({ length: row.length * newSubdivision }, () => ({
 		active: false,
 		velocity: 1,
-		probability: 1
+		probability: 1,
+		iterationN: 1,
+		iterationM: 1
 	}));
 
 	for (let step = 0; step < row.length; step++) {
@@ -235,6 +280,8 @@ export function setSubdivision(row: Row, newSubdivision: number): void {
 			newTrigger.active = true;
 			newTrigger.velocity = oldTrigger.velocity;
 			newTrigger.probability = oldTrigger.probability;
+			newTrigger.iterationN = oldTrigger.iterationN;
+			newTrigger.iterationM = oldTrigger.iterationM;
 		}
 	}
 

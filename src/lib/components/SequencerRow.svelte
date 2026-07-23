@@ -2,6 +2,9 @@
 	import type { Row } from '$lib/sequencer/types';
 	import Fader from '$lib/components/Fader.svelte';
 	import StepFader from '$lib/components/StepFader.svelte';
+	import StepIterationControl from '$lib/components/StepIterationControl.svelte';
+	import SamplePicker from '$lib/components/SamplePicker.svelte';
+	import type { SampleEntry } from '$lib/sequencer/sampleLibrary';
 	import {
 		isStepActive,
 		toggleTrigger,
@@ -20,28 +23,68 @@
 		setVelocity,
 		getProbability,
 		setProbability,
+		getIterationN,
+		setIterationN,
+		getIterationM,
+		setIterationM,
 		MAX_ATTACK_SECONDS,
 		MAX_DECAY_SECONDS
 	} from '$lib/sequencer/types';
 
-	export type OverlayKind = 'settings' | 'velocity' | 'probability';
+	export type OverlayKind = 'settings' | 'sample' | 'velocity' | 'probability' | 'iteration';
 
 	let {
 		row,
 		currentStep = -1,
 		openOverlay = null,
 		onOverlayChange,
-		onNavigateOverlay
+		onNavigateOverlay,
+		onChooseSample,
+		onRemoveRow
 	}: {
 		row: Row;
 		currentStep?: number;
 		openOverlay?: OverlayKind | null;
 		onOverlayChange?: (kind: OverlayKind | null) => void;
 		onNavigateOverlay?: (direction: 1 | -1) => void;
+		onChooseSample?: (sample: SampleEntry) => Promise<void> | void;
+		onRemoveRow?: () => void;
 	} = $props();
 
 	function setOverlay(kind: OverlayKind | null) {
 		onOverlayChange?.(kind);
+	}
+
+	const REMOVE_HOLD_MS = 1000;
+	let removeHoldTimer: ReturnType<typeof setTimeout> | null = null;
+	let removing = $state(false);
+
+	function beginRemoveHold() {
+		removing = true;
+		removeHoldTimer = setTimeout(() => {
+			removeHoldTimer = null;
+			onRemoveRow?.();
+		}, REMOVE_HOLD_MS);
+	}
+
+	function cancelRemoveHold() {
+		removing = false;
+		if (removeHoldTimer !== null) {
+			clearTimeout(removeHoldTimer);
+			removeHoldTimer = null;
+		}
+	}
+
+	// Guards against the hold timer surviving a hold that gets interrupted by
+	// something other than pointerup/pointerleave, e.g. Escape closing the
+	// overlay mid-hold.
+	$effect(() => {
+		if (openOverlay !== 'settings') cancelRemoveHold();
+	});
+
+	async function chooseSample(sample: SampleEntry) {
+		await onChooseSample?.(sample);
+		setOverlay(null);
 	}
 
 	function shorten() {
@@ -67,6 +110,13 @@
 	function formatFrequency(hz: number): string {
 		return hz >= 1000 ? `${(hz / 1000).toFixed(1)}k Hz` : `${Math.round(hz)} Hz`;
 	}
+
+	// Squares velocity so the pad's color intensity ramps up faster at high
+	// velocities and stays compressed at low ones, since low velocities are
+	// rarely used and don't need much of the color range to stay distinguishable.
+	function velocityIntensity(velocity: number): number {
+		return velocity ** 2;
+	}
 </script>
 
 {#snippet overlaySwitcher(current: OverlayKind)}
@@ -80,6 +130,16 @@
 			onclick={() => setOverlay('settings')}
 		>
 			⚙
+		</button>
+		<button
+			type="button"
+			class="switcher-btn"
+			class:active={current === 'sample'}
+			aria-label={`${row.name} sample`}
+			aria-pressed={current === 'sample'}
+			onclick={() => setOverlay('sample')}
+		>
+			♪
 		</button>
 		<button
 			type="button"
@@ -100,6 +160,16 @@
 			onclick={() => setOverlay('probability')}
 		>
 			%
+		</button>
+		<button
+			type="button"
+			class="switcher-btn"
+			class:active={current === 'iteration'}
+			aria-label={`${row.name} iteration`}
+			aria-pressed={current === 'iteration'}
+			onclick={() => setOverlay('iteration')}
+		>
+			↻
 		</button>
 	</div>
 {/snippet}
@@ -142,6 +212,9 @@
 				class="step"
 				class:active={isStepActive(row, step)}
 				class:playing={currentStep === step}
+				style={isStepActive(row, step)
+					? `--velocity: ${velocityIntensity(getVelocity(row, step))}`
+					: undefined}
 				aria-pressed={isStepActive(row, step)}
 				aria-label={`${row.name} step ${step + 1}`}
 				onclick={() => toggleTrigger(row, step)}
@@ -162,17 +235,30 @@
 						<h2>{row.name}</h2>
 						{@render overlayNav(1)}
 					</div>
-					<button
-						type="button"
-						class="close-btn"
-						aria-label="Close settings"
-						onclick={() => setOverlay(null)}
-					>
-						✕
-					</button>
+					<div class="header-actions">
+						<button
+							type="button"
+							class="remove-btn"
+							class:holding={removing}
+							aria-label={`Hold to remove ${row.name}`}
+							onpointerdown={beginRemoveHold}
+							onpointerup={cancelRemoveHold}
+							onpointerleave={cancelRemoveHold}
+							onpointercancel={cancelRemoveHold}
+						>
+							<span class="remove-btn-fill"></span>
+							<span class="remove-btn-icon">🗑</span>
+						</button>
+						<button
+							type="button"
+							class="close-btn"
+							aria-label="Close settings"
+							onclick={() => setOverlay(null)}
+						>
+							✕
+						</button>
+					</div>
 				</header>
-
-				<!-- Sample choice controls will land here later. -->
 
 				<div class="settings-body">
 					<div class="stepper-list">
@@ -252,8 +338,6 @@
 									? 'MAX'
 									: `${Math.round(row.decay * MAX_DECAY_SECONDS * 1000)} ms`}
 							/>
-
-							
 						</div>
 
 						<div class="fader-row">
@@ -291,6 +375,34 @@
 						</div>
 					</div>
 				</div>
+			</div>
+		</div>
+	</div>
+{/if}
+
+{#if openOverlay === 'sample'}
+	<div class="overlay" role="dialog" aria-modal="true" aria-label={`${row.name} sample`}>
+		<div class="overlay-panel bounded-panel">
+			{@render overlaySwitcher('sample')}
+
+			<div class="overlay-content">
+				<header>
+					<div class="header-title">
+						{@render overlayNav(-1)}
+						<h2>{row.name} Sample</h2>
+						{@render overlayNav(1)}
+					</div>
+					<button
+						type="button"
+						class="close-btn"
+						aria-label="Close sample picker"
+						onclick={() => setOverlay(null)}
+					>
+						✕
+					</button>
+				</header>
+
+				<SamplePicker currentSampleId={row.sampleId} onChoose={chooseSample} />
 			</div>
 		</div>
 	</div>
@@ -386,6 +498,53 @@
 	</div>
 {/if}
 
+{#if openOverlay === 'iteration'}
+	<div
+		class="overlay step-overlay"
+		role="dialog"
+		aria-modal="true"
+		aria-label={`${row.name} iteration`}
+	>
+		<div class="overlay-panel bounded-panel">
+			{@render overlaySwitcher('iteration')}
+
+			<div class="overlay-content">
+				<header>
+					<div class="header-title">
+						{@render overlayNav(-1)}
+						<h2>{row.name} Iteration</h2>
+						{@render overlayNav(1)}
+					</div>
+					<button
+						type="button"
+						class="close-btn"
+						aria-label="Close iteration"
+						onclick={() => setOverlay(null)}
+					>
+						✕
+					</button>
+				</header>
+
+				<div class="step-grid">
+					{#each Array.from({ length: row.length }) as _, step (step)}
+						{#if isStepActive(row, step)}
+							<StepIterationControl
+								n={getIterationN(row, step)}
+								m={getIterationM(row, step)}
+								onChangeN={(v) => setIterationN(row, step, v)}
+								onChangeM={(v) => setIterationM(row, step, v)}
+								label={`${row.name} step ${step + 1}`}
+							/>
+						{:else}
+							<div class="step-fader-spacer" aria-hidden="true"></div>
+						{/if}
+					{/each}
+				</div>
+			</div>
+		</div>
+	</div>
+{/if}
+
 <style>
 	.row {
 		display: flex;
@@ -438,6 +597,14 @@
 		}
 	}
 
+	/* Manual override so a tablet held in portrait can still opt into the
+	   16-across landscape layout instead of the cramped-for-nothing 4x4
+	   stack — orientation itself still rotates normally, this just widens
+	   the grid regardless of it. Kept in sync with the landscape query above. */
+	:global(.force-wide) .steps {
+		grid-template-columns: repeat(16, 1fr);
+	}
+
 	.step {
 		width: 100%;
 		min-width: 0;
@@ -449,7 +616,13 @@
 	}
 
 	.step.active {
-		background: var(--color-accent);
+		/* --velocity (0..1) blends the accent color toward the surface color so
+		   quieter steps read as visibly dimmer pads, not just same-color-different-volume. */
+		background: color-mix(
+			in srgb,
+			var(--color-accent) calc(15% + var(--velocity, 1) * 85%),
+			var(--color-surface)
+		);
 		border-color: var(--color-accent-strong);
 	}
 
@@ -469,6 +642,12 @@
 		width: 100%;
 		max-width: 60rem;
 		margin: 0 auto;
+	}
+
+	/* Matches .page's own force-wide override so the overlay keeps lining up
+	   with the row grid when wide layout is on. */
+	:global(.force-wide) .bounded-panel {
+		max-width: none;
 	}
 
 	.step-grid {
@@ -491,6 +670,13 @@
 			padding-left: 2.75rem;
 			gap: 0.35rem;
 		}
+	}
+
+	/* See the .steps override above. */
+	:global(.force-wide) .step-grid {
+		grid-template-columns: repeat(16, 1fr);
+		padding-left: 2.75rem;
+		gap: 0.35rem;
 	}
 
 	.step-fader-spacer {
@@ -577,6 +763,12 @@
 		flex-shrink: 0;
 	}
 
+	.header-actions {
+		display: flex;
+		align-items: center;
+		flex-shrink: 0;
+	}
+
 	.close-btn {
 		width: 2.25rem;
 		height: 2.25rem;
@@ -585,6 +777,40 @@
 		background: var(--color-surface);
 		color: var(--color-text);
 		font-size: 1rem;
+	}
+
+	/* Extra margin (well past the header's other button gaps) plus a hold-to-
+	   confirm fill so this destructive action can't be triggered by a stray
+	   tap next to the close button. */
+	.remove-btn {
+		position: relative;
+		overflow: hidden;
+		width: 2.25rem;
+		height: 2.25rem;
+		margin-right: 1.5rem;
+		border-radius: 0.375rem;
+		border: 1px solid var(--color-danger, #b8433a);
+		background: var(--color-surface);
+		color: var(--color-text);
+		font-size: 1rem;
+	}
+
+	.remove-btn-fill {
+		position: absolute;
+		inset: 0;
+		width: 0%;
+		background: var(--color-danger, #b8433a);
+		pointer-events: none;
+	}
+
+	.remove-btn.holding .remove-btn-fill {
+		width: 100%;
+		transition: width 1s linear;
+	}
+
+	.remove-btn-icon {
+		position: relative;
+		z-index: 1;
 	}
 
 	/* Column layout (steppers above faders) in portrait; landscape moves the
@@ -605,6 +831,12 @@
 		}
 	}
 
+	/* See the .steps override above. */
+	:global(.force-wide) .settings-body {
+		flex-direction: row;
+		gap: 1.5rem;
+	}
+
 	.stepper-list {
 		display: flex;
 		flex-direction: column;
@@ -616,6 +848,12 @@
 			flex-shrink: 0;
 			justify-content: center;
 		}
+	}
+
+	/* See the .steps override above. */
+	:global(.force-wide) .stepper-list {
+		flex-shrink: 0;
+		justify-content: center;
 	}
 
 	/* Label above the buttons (rather than inline) so each stepper is only
@@ -664,6 +902,12 @@
 		}
 	}
 
+	/* See the .steps override above. */
+	:global(.force-wide) .controls-section {
+		flex-direction: row;
+		gap: 1.25rem;
+	}
+
 	.fader-row {
 		flex: 1;
 		min-height: 0;
@@ -676,5 +920,10 @@
 		.fader-row {
 			flex: 0 1 auto;
 		}
+	}
+
+	/* See the .steps override above. */
+	:global(.force-wide) .fader-row {
+		flex: 0 1 auto;
 	}
 </style>

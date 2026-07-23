@@ -1,5 +1,5 @@
 import * as Tone from 'tone';
-import type { Row } from './types';
+import type { Row, Trigger } from './types';
 import { getEnvelopeParams, getFilterParams, triggerIndex, velocityToDb } from './types';
 
 export interface EnvelopeVoice {
@@ -30,6 +30,11 @@ export class SequencerEngine {
 	bpm = $state(120);
 
 	private pulse = 0;
+	// Per-row, per-trigger-index count of active passes reached so far, cycling
+	// 1..iterationM; only stored for triggers actually reached during playback,
+	// so it self-prunes across length/subdivision changes instead of needing
+	// to be resized in step with row.triggers.
+	private iterationCounters = new Map<string, Map<number, number>>();
 
 	constructor() {
 		// Mobile OSes can suspend the AudioContext when the system audio route
@@ -43,7 +48,7 @@ export class SequencerEngine {
 		});
 	}
 
-	async addRow(row: Row, sampleUrl: string): Promise<void> {
+	private createRowVoice(row: Row): RowVoice {
 		const highpass = new Tone.Filter({ type: 'highpass' });
 		const gain = new Tone.Gain(row.gain).toDestination();
 		const lowpass = new Tone.Filter({ type: 'lowpass' }).connect(gain);
@@ -59,10 +64,59 @@ export class SequencerEngine {
 			return { player, envelope };
 		};
 		const voices: [EnvelopeVoice, EnvelopeVoice] = [makeVoice(), makeVoice()];
-		await Promise.all(voices.map((voice) => voice.player.load(sampleUrl)));
+		return { row, voices, activeVoiceIndex: 1, highpass, lowpass, gain };
+	}
 
-		this.rows.push({ row, voices, activeVoiceIndex: 1, highpass, lowpass, gain });
+	async addRow(row: Row, sampleUrl: string): Promise<void> {
+		const voice = this.createRowVoice(row);
+		await Promise.all(voice.voices.map((v) => v.player.load(sampleUrl)));
+		this.rows.push(voice);
 		this.currentSteps[row.id] = -1;
+		this.iterationCounters.set(row.id, new Map());
+	}
+
+	// Adds a row with no sample loaded yet — used when the user hits "+" to
+	// create a row before they've picked what it should sound like. Safe to
+	// play immediately since a fresh row's triggers all start inactive, and
+	// triggerVoice guards against an unloaded player regardless.
+	addBlankRow(row: Row): void {
+		this.rows.push(this.createRowVoice(row));
+		this.currentSteps[row.id] = -1;
+		this.iterationCounters.set(row.id, new Map());
+	}
+
+	// Tears down a row's Tone.js graph and drops it from playback state. Safe
+	// to call mid-playback since the pulse loop only ever iterates `this.rows`,
+	// which is spliced before any nodes are disposed.
+	removeRow(rowId: string): void {
+		const index = this.rows.findIndex((v) => v.row.id === rowId);
+		if (index === -1) return;
+		const [voice] = this.rows.splice(index, 1);
+		for (const v of voice.voices) {
+			v.player.dispose();
+			v.envelope.dispose();
+		}
+		voice.highpass.dispose();
+		voice.lowpass.dispose();
+		voice.gain.dispose();
+		delete this.currentSteps[rowId];
+		this.iterationCounters.delete(rowId);
+	}
+
+	// Swaps the sample backing an existing row (used by the sample picker
+	// overlay), reloading both of its envelope voices' players in place so
+	// the row's identity (steps, faders, choke group, ...) is untouched.
+	async setRowSample(
+		rowId: string,
+		sampleId: string,
+		name: string,
+		sampleUrl: string
+	): Promise<void> {
+		const voice = this.rows.find((v) => v.row.id === rowId);
+		if (!voice) return;
+		await Promise.all(voice.voices.map((v) => v.player.load(sampleUrl)));
+		voice.row.sampleId = sampleId;
+		voice.row.name = name;
 	}
 
 	setBpm(bpm: number): void {
@@ -87,14 +141,20 @@ export class SequencerEngine {
 		this.playing = false;
 		for (const voice of this.rows) {
 			this.currentSteps[voice.row.id] = -1;
+			this.iterationCounters.get(voice.row.id)?.clear();
 		}
 	}
 
 	private onPulse(time: number): void {
 		for (const voice of this.rows) {
 			const step = this.pulse % voice.row.length;
-			const trigger = voice.row.triggers[triggerIndex(voice.row, step)];
-			if (trigger?.active && Math.random() < trigger.probability) {
+			const idx = triggerIndex(voice.row, step);
+			const trigger = voice.row.triggers[idx];
+			if (
+				trigger?.active &&
+				this.reachedIteration(voice.row.id, idx, trigger) &&
+				Math.random() < trigger.probability
+			) {
 				this.triggerVoice(voice, time, trigger.velocity);
 			}
 			Tone.getDraw().schedule(() => {
@@ -102,6 +162,19 @@ export class SequencerEngine {
 			}, time);
 		}
 		this.pulse++;
+	}
+
+	// Advances the trigger's own pass counter (cycling 1..iterationM) and
+	// reports whether this pass lands on iterationN, i.e. whether the note
+	// should sound at all before probability gets a chance to silence it.
+	private reachedIteration(rowId: string, idx: number, trigger: Trigger): boolean {
+		const counters = this.iterationCounters.get(rowId);
+		if (!counters) return true;
+		const m = Math.max(1, trigger.iterationM);
+		const n = Math.min(Math.max(1, trigger.iterationN), m);
+		const count = (counters.get(idx) ?? 0) + 1;
+		counters.set(idx, count >= m ? 0 : count);
+		return count === n;
 	}
 
 	// Alternates the row between its two envelope voices on every hit: the
@@ -114,6 +187,11 @@ export class SequencerEngine {
 		const incomingIndex = voice.activeVoiceIndex === 0 ? 1 : 0;
 		const incoming = voice.voices[incomingIndex];
 		const outgoing = voice.voices[voice.activeVoiceIndex];
+
+		// A freshly-added row can have its triggers toggled on before a sample
+		// is ever chosen for it; skip silently rather than letting Tone.js
+		// throw on a player with no buffer loaded.
+		if (!incoming.player.loaded) return;
 
 		outgoing.envelope.cancel(time);
 		outgoing.envelope.triggerRelease(time);

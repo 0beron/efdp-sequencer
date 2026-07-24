@@ -82,9 +82,8 @@
 		if (openOverlay !== 'settings') cancelRemoveHold();
 	});
 
-	async function chooseSample(sample: SampleEntry) {
-		await onChooseSample?.(sample);
-		setOverlay(null);
+	function chooseSample(sample: SampleEntry) {
+		onChooseSample?.(sample);
 	}
 
 	function shorten() {

@@ -87,6 +87,27 @@ export function createRow(options: {
 	};
 }
 
+// Resets a row's grid and per-row controls back to their created-row defaults,
+// leaving identity (id/name/sampleId) and shape (length/subdivision) untouched
+// — backs the header's "clear" action, which must not disturb loaded samples.
+export function resetRow(row: Row): void {
+	row.triggers = Array.from({ length: row.length * row.subdivision }, () => ({
+		active: false,
+		velocity: 1,
+		probability: 1,
+		iterationN: 1,
+		iterationM: 1
+	}));
+	row.attack = 0;
+	row.decay = 1;
+	row.gain = 1;
+	row.lowpassCutoff = 1;
+	row.lowpassResonance = 0;
+	row.highpassCutoff = 0;
+	row.highpassResonance = 0;
+	row.chokeGroup = 0;
+}
+
 export function setAttack(row: Row, value: number): void {
 	row.attack = value;
 }

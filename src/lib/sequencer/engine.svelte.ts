@@ -1,10 +1,13 @@
 import * as Tone from 'tone';
 import type { Row, Trigger } from './types';
-import { getEnvelopeParams, getFilterParams, triggerIndex, velocityToDb } from './types';
+import { getEnvelopeParams, getFilterParams, resetRow, triggerIndex, velocityToDb } from './types';
 
 export interface EnvelopeVoice {
 	player: Tone.Player;
 	envelope: Tone.AmplitudeEnvelope;
+	// Whether this voice's current buffer has had its one-time "cold start"
+	// absorbed already — see primeVoice.
+	primed: boolean;
 }
 
 export interface RowVoice {
@@ -61,7 +64,7 @@ export class SequencerEngine {
 		const makeVoice = (): EnvelopeVoice => {
 			const envelope = new Tone.AmplitudeEnvelope().connect(highpass);
 			const player = new Tone.Player().connect(envelope);
-			return { player, envelope };
+			return { player, envelope, primed: false };
 		};
 		const voices: [EnvelopeVoice, EnvelopeVoice] = [makeVoice(), makeVoice()];
 		return { row, voices, activeVoiceIndex: 1, highpass, lowpass, gain };
@@ -70,9 +73,28 @@ export class SequencerEngine {
 	async addRow(row: Row, sampleUrl: string): Promise<void> {
 		const voice = this.createRowVoice(row);
 		await Promise.all(voice.voices.map((v) => v.player.load(sampleUrl)));
+		voice.voices.forEach((v) => this.primeVoice(v));
 		this.rows.push(voice);
 		this.currentSteps[row.id] = -1;
 		this.iterationCounters.set(row.id, new Map());
+	}
+
+	// Chromium browsers do one-time internal setup (channel/resampling prep)
+	// the first time a given decoded AudioBuffer is ever fed into a source
+	// node's start() — if that first-ever start lands on a real trigger, the
+	// setup latency eats into the front of the sample and its attack goes
+	// unheard. Priming plays the buffer once, silently (the envelope's output
+	// is 0 until triggerAttack runs), immediately after load, so the buffer is
+	// already warm by the time a real note uses it. No-ops until the context
+	// is actually running, since Player.start() requires that.
+	private primeVoice(voice: EnvelopeVoice): void {
+		if (voice.primed || !voice.player.loaded) return;
+		const context = Tone.getContext();
+		if (context.state !== 'running') return;
+		const now = context.currentTime;
+		voice.player.start(now);
+		voice.player.stop(now + 0.02);
+		voice.primed = true;
 	}
 
 	// Adds a row with no sample loaded yet — used when the user hits "+" to
@@ -115,8 +137,23 @@ export class SequencerEngine {
 		const voice = this.rows.find((v) => v.row.id === rowId);
 		if (!voice) return;
 		await Promise.all(voice.voices.map((v) => v.player.load(sampleUrl)));
+		for (const v of voice.voices) {
+			v.primed = false;
+			this.primeVoice(v);
+		}
 		voice.row.sampleId = sampleId;
 		voice.row.name = name;
+	}
+
+	// Resets every row's grid, velocity/probability/iteration, faders, filters
+	// and choke group back to defaults - leaves each row's sample, name and
+	// shape untouched. Also clears iteration counters so a still-running loop
+	// doesn't carry over stale pass counts for the wiped triggers.
+	clearAll(): void {
+		for (const voice of this.rows) {
+			resetRow(voice.row);
+			this.iterationCounters.set(voice.row.id, new Map());
+		}
 	}
 
 	setBpm(bpm: number): void {
@@ -124,8 +161,21 @@ export class SequencerEngine {
 		Tone.getTransport().bpm.value = bpm;
 	}
 
+	// Plain-data snapshot of every row's own state, suitable for JSON
+	// serialization - excludes the rest of RowVoice (players, envelopes,
+	// filters), which isn't part of the row itself and isn't serializable.
+	snapshotRows(): Row[] {
+		return this.rows.map((voice) => $state.snapshot(voice.row));
+	}
+
 	async start(): Promise<void> {
 		await Tone.start();
+		// Rows can be added before the context is ever running (context.state
+		// !== 'running' makes primeVoice a no-op at load time), so catch those
+		// up now that it is.
+		for (const voice of this.rows) {
+			voice.voices.forEach((v) => this.primeVoice(v));
+		}
 		const transport = Tone.getTransport();
 		transport.bpm.value = this.bpm;
 		this.pulse = 0;

@@ -5,7 +5,9 @@
 	import { SequencerEngine } from '$lib/sequencer/engine.svelte';
 	import { createRow } from '$lib/sequencer/types';
 	import SequencerRow, { type OverlayKind } from '$lib/components/SequencerRow.svelte';
-	import type { SampleEntry } from '$lib/sequencer/sampleLibrary';
+	import { loadSampleLibrary, type SampleEntry } from '$lib/sequencer/sampleLibrary';
+	import { KITS, type Kit } from '$lib/sequencer/kits';
+	import { loadPersistedState, schedulePersist } from '$lib/sequencer/persistence';
 
 	const engine = new SequencerEngine();
 	let ready = $state(false);
@@ -34,47 +36,51 @@
 		activeOverlay = { rowId: ids[nextIndex], kind };
 	}
 
+	// Restores a previous session's rows/bpm from localStorage when there's a
+	// validly-shaped, current-version save; otherwise falls back to the
+	// default kit, same as a first-ever visit.
 	async function ensureLoaded() {
 		if (ready || loading) return;
 		loading = true;
-		await engine.addRow(
-			createRow({ id: 'kick', name: 'Kick', sampleId: 'kick' }),
-			asset('/samples/kick.wav')
-		);
-		await engine.addRow(
-			createRow({ id: 'snare', name: 'Snare', sampleId: 'snare' }),
-			asset('/samples/snare.wav')
-		);
-		await engine.addRow(
-			createRow({ id: 'ch', name: 'Closed HH', sampleId: 'ch' }),
-			asset('/samples/ch.wav')
-		);
-		await engine.addRow(
-			createRow({ id: 'oh', name: 'Open HH', sampleId: 'oh' }),
-			asset('/samples/oh.wav')
-		);
-		await engine.addRow(
-			createRow({ id: 'clap', name: 'Clap', sampleId: 'clap' }),
-			asset('/samples/clap.wav')
-		);
-		await engine.addRow(
-			createRow({ id: 'shaker', name: 'Shaker', sampleId: 'shaker' }),
-			asset('/samples/shaker.wav')
-		);
-		await engine.addRow(
-			createRow({ id: 'cowbell', name: 'Cowbell', sampleId: 'cowbell' }),
-			asset('/samples/cowbell.wav')
-		);
-		await engine.addRow(
-			createRow({ id: 'crash', name: 'Crash', sampleId: 'crash' }),
-			asset('/samples/crash.wav')
-		);
+		const saved = browser ? loadPersistedState() : null;
+		if (saved && saved.rows.length > 0) {
+			engine.setBpm(saved.bpm);
+			const library = await loadSampleLibrary();
+			const byId = new Map(library.map((s) => [s.id, s]));
+			for (const row of saved.rows) {
+				const sample = row.sampleId ? byId.get(row.sampleId) : undefined;
+				// A sample that no longer resolves (renamed/removed since the
+				// save) comes back as a blank row - silent but keeping its
+				// pattern/faders - rather than dropping the row entirely.
+				if (sample) {
+					await engine.addRow(row, sample.url);
+				} else {
+					engine.addBlankRow(row);
+				}
+			}
+		} else {
+			for (const s of KITS[0].samples) {
+				await engine.addRow(
+					createRow({ id: s.sampleId, name: s.name, sampleId: s.sampleId }),
+					s.url
+				);
+			}
+		}
 		ready = true;
 		loading = false;
 	}
 
 	onMount(() => {
 		ensureLoaded();
+	});
+
+	// Autosaves on every change to bpm or any row's own state (pattern,
+	// sample, faders, choke group, ...). Gated on `ready` so the incremental
+	// row-by-row restore in ensureLoaded() above never overwrites the save
+	// it's still in the middle of reading.
+	$effect(() => {
+		if (!ready) return;
+		schedulePersist(engine.bpm, engine.snapshotRows());
 	});
 
 	async function toggle() {
@@ -99,6 +105,30 @@
 		engine.setBpm(clamped);
 	}
 
+	// Mirrors SequencerRow's hold-to-remove pattern: clearing wipes every row's
+	// grid/velocity/iteration/faders, so it needs the same guard against a
+	// stray tap triggering it.
+	const CLEAR_HOLD_MS = 1000;
+	let clearHoldTimer: ReturnType<typeof setTimeout> | null = null;
+	let clearing = $state(false);
+
+	function beginClearHold() {
+		clearing = true;
+		clearHoldTimer = setTimeout(() => {
+			clearHoldTimer = null;
+			clearing = false;
+			engine.clearAll();
+		}, CLEAR_HOLD_MS);
+	}
+
+	function cancelClearHold() {
+		clearing = false;
+		if (clearHoldTimer !== null) {
+			clearTimeout(clearHoldTimer);
+			clearHoldTimer = null;
+		}
+	}
+
 	// A brand new row starts with no sample loaded, and its sample overlay is
 	// opened immediately so the user picks one right away rather than seeing
 	// a silent, unlabeled row sit in the list.
@@ -117,6 +147,21 @@
 		engine.removeRow(rowId);
 		if (activeOverlay?.rowId === rowId) activeOverlay = null;
 	}
+
+	// Applies a kit positionally — kit sample N replaces row N's sample,
+	// leaving the row's pattern/faders/choke group untouched. Rows beyond the
+	// kit's length are left alone.
+	async function loadKit(kit: Kit) {
+		if (engine.playing) return;
+		await Promise.all(
+			kit.samples.map((sample, index) => {
+				const voice = engine.rows[index];
+				return voice
+					? engine.setRowSample(voice.row.id, sample.sampleId, sample.name, sample.url)
+					: undefined;
+			})
+		);
+	}
 </script>
 
 <svelte:window
@@ -127,14 +172,7 @@
 
 <div class="page" class:force-wide={forceWide}>
 	<div class="header">
-		<button
-			type="button"
-			class="logo-btn"
-			aria-label="Open settings"
-			onclick={() => (settingsOpen = true)}
-		>
-			<img class="logo" src={asset('/img/neonquaver.png')} alt="EFDP Sequencer" />
-		</button>
+		<img class="logo" src={asset('/img/neonquaver.png')} alt="EFDP Sequencer" />
 		<button
 			class="transport"
 			onclick={toggle}
@@ -194,6 +232,30 @@
 		</div>
 	</div>
 
+	<div class="toolbar">
+		<button
+			type="button"
+			class="cog-btn"
+			aria-label="Open settings"
+			onclick={() => (settingsOpen = true)}
+		>
+			⚙
+		</button>
+		<button
+			type="button"
+			class="clear-btn"
+			class:holding={clearing}
+			aria-label="Hold to clear grid"
+			onpointerdown={beginClearHold}
+			onpointerup={cancelClearHold}
+			onpointerleave={cancelClearHold}
+			onpointercancel={cancelClearHold}
+		>
+			<span class="clear-btn-fill"></span>
+			<span class="clear-btn-icon">🧹</span>
+		</button>
+	</div>
+
 	<div class="rows">
 		{#each engine.rows as voice (voice.row.id)}
 			<SequencerRow
@@ -238,6 +300,22 @@
 					<input type="checkbox" checked={forceWide} onchange={onForceWideChange} />
 					Wide layout
 				</label>
+
+				<section class="kits">
+					<h3>Kits</h3>
+					<div class="kit-list">
+						{#each KITS as kit (kit.id)}
+							<button
+								type="button"
+								class="kit-btn"
+								disabled={engine.playing}
+								onclick={() => loadKit(kit)}
+							>
+								{kit.name}
+							</button>
+						{/each}
+					</div>
+				</section>
 			</div>
 		</div>
 	{/if}
@@ -273,15 +351,8 @@
 		gap: 0.75rem;
 	}
 
-	.logo-btn {
-		flex-shrink: 0;
-		padding: 0;
-		border: none;
-		background: none;
-		line-height: 0;
-	}
-
 	.logo {
+		flex-shrink: 0;
 		width: auto;
 		height: 2.5rem;
 	}
@@ -335,6 +406,59 @@
 		color: var(--color-text);
 	}
 
+	.toolbar {
+		margin-top: 0.5rem;
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.cog-btn {
+		width: 2.25rem;
+		height: 2.25rem;
+		border-radius: 0.375rem;
+		border: 1px solid var(--color-border);
+		background: var(--color-surface-raised);
+		color: var(--color-text);
+		font-size: 1rem;
+	}
+
+	.cog-btn:hover {
+		background: var(--color-surface);
+	}
+
+	/* Hold-to-confirm fill, same pattern as SequencerRow's remove button, so a
+	   stray tap can't wipe every row's grid and faders. */
+	.clear-btn {
+		position: relative;
+		overflow: hidden;
+		width: 2.25rem;
+		height: 2.25rem;
+		border-radius: 0.375rem;
+		border: 1px solid var(--color-danger, #b8433a);
+		background: var(--color-surface);
+		color: var(--color-text);
+		font-size: 1rem;
+	}
+
+	.clear-btn-fill {
+		position: absolute;
+		inset: 0;
+		width: 0%;
+		background: var(--color-danger, #b8433a);
+		pointer-events: none;
+	}
+
+	.clear-btn.holding .clear-btn-fill {
+		width: 100%;
+		transition: width 1s linear;
+	}
+
+	.clear-btn-icon {
+		position: relative;
+		z-index: 1;
+	}
+
 	.overlay {
 		position: fixed;
 		inset: 0;
@@ -380,6 +504,40 @@
 	.wide-toggle input {
 		width: 1.25rem;
 		height: 1.25rem;
+	}
+
+	.kits {
+		margin-top: 1.5rem;
+	}
+
+	.kits h3 {
+		margin: 0 0 0.5rem;
+		font-size: 0.95rem;
+		color: var(--color-text);
+	}
+
+	.kit-list {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+	}
+
+	.kit-btn {
+		height: 2.25rem;
+		padding: 0 1rem;
+		border-radius: 0.375rem;
+		border: 1px solid var(--color-border);
+		background: var(--color-surface-raised);
+		color: var(--color-text);
+		font-size: 0.9rem;
+	}
+
+	.kit-btn:disabled {
+		opacity: 0.5;
+	}
+
+	.kit-btn:not(:disabled):hover {
+		background: var(--color-surface);
 	}
 
 	.rows {

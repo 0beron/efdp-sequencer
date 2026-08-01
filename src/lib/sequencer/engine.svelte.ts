@@ -49,6 +49,13 @@ export class SequencerEngine {
 				context.resume();
 			}
 		});
+		// Registered exactly once for the engine's lifetime rather than in
+		// start() - re-registering it on every start() (relying on stop()'s
+		// transport.cancel() to remove the previous one) meant a re-entrant
+		// start() call (e.g. a double-click before `playing` flips true) could
+		// register a second repeat, doubling the rate onPulse fires and
+		// skewing every row's step counter.
+		Tone.getTransport().scheduleRepeat((time) => this.onPulse(time), '16n');
 	}
 
 	private createRowVoice(row: Row): RowVoice {
@@ -169,6 +176,12 @@ export class SequencerEngine {
 	}
 
 	async start(): Promise<void> {
+		// Set (and check) `playing` synchronously, before the first await, so
+		// a second start() call landing while this one is still awaiting
+		// Tone.start() - e.g. a double-click - sees playing already true and
+		// bails out instead of racing this call.
+		if (this.playing) return;
+		this.playing = true;
 		await Tone.start();
 		// Rows can be added before the context is ever running (context.state
 		// !== 'running' makes primeVoice a no-op at load time), so catch those
@@ -179,15 +192,11 @@ export class SequencerEngine {
 		const transport = Tone.getTransport();
 		transport.bpm.value = this.bpm;
 		this.pulse = 0;
-		transport.scheduleRepeat((time) => this.onPulse(time), '16n');
 		transport.start();
-		this.playing = true;
 	}
 
 	stop(): void {
-		const transport = Tone.getTransport();
-		transport.stop();
-		transport.cancel();
+		Tone.getTransport().stop();
 		this.playing = false;
 		for (const voice of this.rows) {
 			this.currentSteps[voice.row.id] = -1;

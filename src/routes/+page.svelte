@@ -7,7 +7,12 @@
 	import SequencerRow, { type OverlayKind } from '$lib/components/SequencerRow.svelte';
 	import { loadSampleLibrary, type SampleEntry } from '$lib/sequencer/sampleLibrary';
 	import { KITS, type Kit } from '$lib/sequencer/kits';
-	import { loadPersistedState, schedulePersist } from '$lib/sequencer/persistence';
+	import {
+		loadPersistedState,
+		schedulePersist,
+		decodeStateFromFragment,
+		scheduleUrlSync
+	} from '$lib/sequencer/persistence';
 
 	const engine = new SequencerEngine();
 	let ready = $state(false);
@@ -36,13 +41,20 @@
 		activeOverlay = { rowId: ids[nextIndex], kind };
 	}
 
-	// Restores a previous session's rows/bpm from localStorage when there's a
-	// validly-shaped, current-version save; otherwise falls back to the
-	// default kit, same as a first-ever visit.
+	// Restores a pattern in priority order: a shared link's URL hash first (so
+	// opening one always shows that pattern, even over a returning user's own
+	// saved session), then this browser's own localStorage save, then finally
+	// the default kit, same as a first-ever visit. A hash that fails to decode
+	// (stale, hand-edited, or from a browser without CompressionStream) is
+	// treated the same as no hash at all.
 	async function ensureLoaded() {
 		if (ready || loading) return;
 		loading = true;
-		const saved = browser ? loadPersistedState() : null;
+		const fromUrl =
+			browser && location.hash.length > 1
+				? await decodeStateFromFragment(location.hash.slice(1))
+				: null;
+		const saved = fromUrl ?? (browser ? loadPersistedState() : null);
 		if (saved && saved.rows.length > 0) {
 			engine.setBpm(saved.bpm);
 			const library = await loadSampleLibrary();
@@ -75,12 +87,17 @@
 	});
 
 	// Autosaves on every change to bpm or any row's own state (pattern,
-	// sample, faders, choke group, ...). Gated on `ready` so the incremental
-	// row-by-row restore in ensureLoaded() above never overwrites the save
-	// it's still in the middle of reading.
+	// sample, faders, choke group, ...): to localStorage so the session
+	// survives a reload, and to the URL hash so the address bar always
+	// reflects the current pattern and can be copied to share it. Gated on
+	// `ready` so the incremental row-by-row restore in ensureLoaded() above
+	// never overwrites the save it's still in the middle of reading.
 	$effect(() => {
 		if (!ready) return;
-		schedulePersist(engine.bpm, engine.snapshotRows());
+		const bpm = engine.bpm;
+		const rows = engine.snapshotRows();
+		schedulePersist(bpm, rows);
+		scheduleUrlSync(bpm, rows);
 	});
 
 	async function toggle() {

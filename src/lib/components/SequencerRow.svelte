@@ -40,7 +40,8 @@
 		onOverlayChange,
 		onNavigateOverlay,
 		onChooseSample,
-		onRemoveRow
+		onRemoveRow,
+		onSoundChange
 	}: {
 		row: Row;
 		currentStep?: number;
@@ -49,6 +50,10 @@
 		onNavigateOverlay?: (direction: 1 | -1) => void;
 		onChooseSample?: (sample: SampleEntry) => Promise<void> | void;
 		onRemoveRow?: () => void;
+		// Called after a filter/gain fader changes so the engine can push it to
+		// the row's live audio nodes immediately, instead of leaving it to sit
+		// unheard until the row's next trigger.
+		onSoundChange?: () => void;
 	} = $props();
 
 	function setOverlay(kind: OverlayKind | null) {
@@ -316,7 +321,10 @@
 								label="Volume"
 								ariaLabel={`${row.name} volume`}
 								value={row.gain}
-								onChange={(v) => setGain(row, v)}
+								onChange={(v) => {
+									setGain(row, v);
+									onSoundChange?.();
+								}}
 								displayValue={`${Math.round(row.gain * 100)}%`}
 							/>
 
@@ -344,7 +352,10 @@
 								label="Lo Cutoff"
 								ariaLabel={`${row.name} low pass cutoff`}
 								value={row.lowpassCutoff}
-								onChange={(v) => setLowpassCutoff(row, v)}
+								onChange={(v) => {
+									setLowpassCutoff(row, v);
+									onSoundChange?.();
+								}}
 								displayValue={formatFrequency(normalizedToFilterFrequency(row.lowpassCutoff))}
 							/>
 
@@ -352,7 +363,10 @@
 								label="Lo Reso"
 								ariaLabel={`${row.name} low pass resonance`}
 								value={row.lowpassResonance}
-								onChange={(v) => setLowpassResonance(row, v)}
+								onChange={(v) => {
+									setLowpassResonance(row, v);
+									onSoundChange?.();
+								}}
 								displayValue={normalizedToFilterQ(row.lowpassResonance).toFixed(1)}
 							/>
 
@@ -360,7 +374,10 @@
 								label="Hi Cutoff"
 								ariaLabel={`${row.name} high pass cutoff`}
 								value={row.highpassCutoff}
-								onChange={(v) => setHighpassCutoff(row, v)}
+								onChange={(v) => {
+									setHighpassCutoff(row, v);
+									onSoundChange?.();
+								}}
 								displayValue={formatFrequency(normalizedToFilterFrequency(row.highpassCutoff))}
 							/>
 
@@ -368,7 +385,10 @@
 								label="Hi Reso"
 								ariaLabel={`${row.name} high pass resonance`}
 								value={row.highpassResonance}
-								onChange={(v) => setHighpassResonance(row, v)}
+								onChange={(v) => {
+									setHighpassResonance(row, v);
+									onSoundChange?.();
+								}}
 								displayValue={normalizedToFilterQ(row.highpassResonance).toFixed(1)}
 							/>
 						</div>

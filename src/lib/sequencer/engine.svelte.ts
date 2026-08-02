@@ -5,9 +5,6 @@ import { getEnvelopeParams, getFilterParams, resetRow, triggerIndex, velocityToD
 export interface EnvelopeVoice {
 	player: Tone.Player;
 	envelope: Tone.AmplitudeEnvelope;
-	// Whether this voice's current buffer has had its one-time "cold start"
-	// absorbed already — see primeVoice.
-	primed: boolean;
 }
 
 export interface RowVoice {
@@ -63,6 +60,18 @@ export class SequencerEngine {
 		const gain = new Tone.Gain(row.gain).toDestination();
 		const lowpass = new Tone.Filter({ type: 'lowpass' }).connect(gain);
 		highpass.connect(lowpass);
+		// Tone.Filter defaults to frequency=350/Q=1 regardless of type. Without
+		// this, a row's first trigger was the first time getFilterParams ever
+		// ran, so every row's very first hit played through those leftover
+		// defaults instead of its real (usually wide-open) filter settings - a
+		// 350Hz lowpass badly muffles a drum sample's transient. Presetting them
+		// here means every trigger, including the first, only ever sees the
+		// row's real values.
+		const initialFilterParams = getFilterParams(row);
+		highpass.frequency.value = initialFilterParams.highpassFrequency;
+		highpass.Q.value = initialFilterParams.highpassQ;
+		lowpass.frequency.value = initialFilterParams.lowpassFrequency;
+		lowpass.Q.value = initialFilterParams.lowpassQ;
 
 		// Each voice gets its own player rather than sharing one between the
 		// two envelopes — a shared player can only feed one envelope's chain
@@ -71,7 +80,7 @@ export class SequencerEngine {
 		const makeVoice = (): EnvelopeVoice => {
 			const envelope = new Tone.AmplitudeEnvelope().connect(highpass);
 			const player = new Tone.Player().connect(envelope);
-			return { player, envelope, primed: false };
+			return { player, envelope };
 		};
 		const voices: [EnvelopeVoice, EnvelopeVoice] = [makeVoice(), makeVoice()];
 		return { row, voices, activeVoiceIndex: 1, highpass, lowpass, gain };
@@ -80,28 +89,9 @@ export class SequencerEngine {
 	async addRow(row: Row, sampleUrl: string): Promise<void> {
 		const voice = this.createRowVoice(row);
 		await Promise.all(voice.voices.map((v) => v.player.load(sampleUrl)));
-		voice.voices.forEach((v) => this.primeVoice(v));
 		this.rows.push(voice);
 		this.currentSteps[row.id] = -1;
 		this.iterationCounters.set(row.id, new Map());
-	}
-
-	// Chromium browsers do one-time internal setup (channel/resampling prep)
-	// the first time a given decoded AudioBuffer is ever fed into a source
-	// node's start() — if that first-ever start lands on a real trigger, the
-	// setup latency eats into the front of the sample and its attack goes
-	// unheard. Priming plays the buffer once, silently (the envelope's output
-	// is 0 until triggerAttack runs), immediately after load, so the buffer is
-	// already warm by the time a real note uses it. No-ops until the context
-	// is actually running, since Player.start() requires that.
-	private primeVoice(voice: EnvelopeVoice): void {
-		if (voice.primed || !voice.player.loaded) return;
-		const context = Tone.getContext();
-		if (context.state !== 'running') return;
-		const now = context.currentTime;
-		voice.player.start(now);
-		voice.player.stop(now + 0.02);
-		voice.primed = true;
 	}
 
 	// Adds a row with no sample loaded yet — used when the user hits "+" to
@@ -144,10 +134,6 @@ export class SequencerEngine {
 		const voice = this.rows.find((v) => v.row.id === rowId);
 		if (!voice) return;
 		await Promise.all(voice.voices.map((v) => v.player.load(sampleUrl)));
-		for (const v of voice.voices) {
-			v.primed = false;
-			this.primeVoice(v);
-		}
 		voice.row.sampleId = sampleId;
 		voice.row.name = name;
 	}
@@ -183,12 +169,6 @@ export class SequencerEngine {
 		if (this.playing) return;
 		this.playing = true;
 		await Tone.start();
-		// Rows can be added before the context is ever running (context.state
-		// !== 'running' makes primeVoice a no-op at load time), so catch those
-		// up now that it is.
-		for (const voice of this.rows) {
-			voice.voices.forEach((v) => this.primeVoice(v));
-		}
 		const transport = Tone.getTransport();
 		transport.bpm.value = this.bpm;
 		this.pulse = 0;
@@ -274,17 +254,35 @@ export class SequencerEngine {
 		incoming.envelope.sustain = params.sustain;
 		incoming.envelope.release = params.release;
 
+		this.applyFilterAndGain(voice);
+
+		incoming.envelope.cancel(time);
+		incoming.envelope.triggerAttack(time);
+
+		voice.activeVoiceIndex = incomingIndex;
+	}
+
+	// Pushes a row's current filter cutoff/resonance and gain onto its live
+	// audio nodes. Every trigger does this anyway (a row's sound can change
+	// between hits), but filters and gain - unlike attack/decay, which only
+	// shape a *new* note - are audible on an already-sounding voice too, so
+	// updateRowSound below calls this directly to apply a fader move
+	// immediately instead of leaving it to sit unheard until the row's next
+	// trigger picks it up.
+	private applyFilterAndGain(voice: RowVoice): void {
 		const filterParams = getFilterParams(voice.row);
 		voice.highpass.frequency.value = filterParams.highpassFrequency;
 		voice.highpass.Q.value = filterParams.highpassQ;
 		voice.lowpass.frequency.value = filterParams.lowpassFrequency;
 		voice.lowpass.Q.value = filterParams.lowpassQ;
 		voice.gain.gain.value = voice.row.gain;
+	}
 
-		incoming.envelope.cancel(time);
-		incoming.envelope.triggerAttack(time);
-
-		voice.activeVoiceIndex = incomingIndex;
+	// Call after changing a row's filter or gain fader so the change is heard
+	// right away, rather than waiting for the row's next trigger.
+	updateRowSound(rowId: string): void {
+		const voice = this.rows.find((v) => v.row.id === rowId);
+		if (voice) this.applyFilterAndGain(voice);
 	}
 
 	// Immediately silences whichever of the row's two voices is currently

@@ -284,6 +284,7 @@
 					activeOverlay && navigateOverlay(voice.row.id, activeOverlay.kind, direction)}
 				onChooseSample={(sample) => chooseSample(voice.row.id, sample)}
 				onRemoveRow={() => removeRow(voice.row.id)}
+				onSoundChange={() => engine.updateRowSound(voice.row.id)}
 			/>
 		{/each}
 

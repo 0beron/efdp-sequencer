@@ -138,10 +138,11 @@ export class SequencerEngine {
 		voice.row.name = name;
 	}
 
-	// Resets every row's grid, velocity/probability/iteration, faders, filters
-	// and choke group back to defaults - leaves each row's sample, name and
-	// shape untouched. Also clears iteration counters so a still-running loop
-	// doesn't carry over stale pass counts for the wiped triggers.
+	// Resets every row's grid, velocity/probability/iteration, faders, filters,
+	// choke group and length (back to 16 steps) - leaves each row's sample,
+	// name and subdivision untouched. Also clears iteration counters so a
+	// still-running loop doesn't carry over stale pass counts for the wiped
+	// triggers.
 	clearAll(): void {
 		for (const voice of this.rows) {
 			resetRow(voice.row);
@@ -177,6 +178,10 @@ export class SequencerEngine {
 
 	stop(): void {
 		Tone.getTransport().stop();
+		// Drop any already-queued Draw callbacks from onPulse. Most races are
+		// caught here; the `playing` guard in onPulse's callback (below) covers
+		// the rest, since Transport's clock can dispatch a tick just after stop().
+		Tone.getDraw().cancel();
 		this.playing = false;
 		for (const voice of this.rows) {
 			this.currentSteps[voice.row.id] = -1;
@@ -197,7 +202,11 @@ export class SequencerEngine {
 				this.triggerVoice(voice, time, trigger.velocity);
 			}
 			Tone.getDraw().schedule(() => {
-				this.currentSteps[voice.row.id] = step;
+				// Transport's clock dispatches ticks slightly ahead of real time, so
+				// an onPulse already in flight when stop() runs can still schedule
+				// this callback after stop() has reset currentSteps. Guard against
+				// that here rather than relying on cancelling it in time.
+				if (this.playing) this.currentSteps[voice.row.id] = step;
 			}, time);
 		}
 		this.pulse++;

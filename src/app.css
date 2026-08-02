@@ -46,6 +46,21 @@ body {
 	   in standalone mode; pad it back out so content isn't obscured there. */
 	padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
 		env(safe-area-inset-left);
+	/* The grid, faders and hold-to-clear/remove buttons are all long-press
+	   surfaces; without this, iOS Safari treats the hold as a text-selection
+	   gesture and pops the Copy/Look Up callout over them. */
+	-webkit-touch-callout: none;
+	-webkit-user-select: none;
+	user-select: none;
+}
+
+/* ...except real text inputs (currently just the BPM field), which should
+   keep normal selection/copy-paste behavior. */
+input,
+textarea {
+	-webkit-touch-callout: default;
+	-webkit-user-select: text;
+	user-select: text;
 }
 
 h1,

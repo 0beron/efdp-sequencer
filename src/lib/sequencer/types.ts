@@ -88,9 +88,11 @@ export function createRow(options: {
 }
 
 // Resets a row's grid and per-row controls back to their created-row defaults,
-// leaving identity (id/name/sampleId) and shape (length/subdivision) untouched
-// — backs the header's "clear" action, which must not disturb loaded samples.
+// leaving identity (id/name/sampleId) and subdivision untouched — backs the
+// header's "clear" action, which must not disturb loaded samples. Length is
+// reset to 16 steps along with everything else the clear action wipes.
 export function resetRow(row: Row): void {
+	row.length = 16;
 	row.triggers = Array.from({ length: row.length * row.subdivision }, () => ({
 		active: false,
 		velocity: 1,

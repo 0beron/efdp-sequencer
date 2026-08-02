@@ -11,6 +11,7 @@
 		loadPersistedState,
 		schedulePersist,
 		decodeStateFromFragment,
+		encodeStateToFragment,
 		scheduleUrlSync
 	} from '$lib/sequencer/persistence';
 
@@ -120,6 +121,53 @@
 	function adjustBpm(delta: number) {
 		const clamped = Math.min(MAX_BPM, Math.max(MIN_BPM, engine.bpm + delta));
 		engine.setBpm(clamped);
+	}
+
+	// Builds the share link directly from current state rather than reading
+	// location.href, so a copy right after an edit can't race the debounced
+	// scheduleUrlSync in the effect above and grab a stale hash.
+	let linkStatus: 'idle' | 'copied' | 'failed' = $state('idle');
+	let linkStatusTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function buildShareUrl(): Promise<string> {
+		return encodeStateToFragment(engine.bpm, engine.snapshotRows()).then(
+			(fragment) => `${location.origin}${location.pathname}#${fragment}`
+		);
+	}
+
+	function flashLinkStatus(status: 'copied' | 'failed') {
+		linkStatus = status;
+		if (linkStatusTimer !== null) clearTimeout(linkStatusTimer);
+		linkStatusTimer = setTimeout(() => (linkStatus = 'idle'), 1500);
+	}
+
+	async function copyShareLink() {
+		try {
+			// Safari only honours navigator.clipboard.writeText when it's called
+			// synchronously inside the gesture handler - by the time our gzip
+			// compression above would resolve, it no longer counts as "trusted"
+			// and the write is silently dropped. Passing a ClipboardItem whose
+			// value is a pending Promise is the documented escape hatch: Safari
+			// keeps the gesture association alive until that promise settles,
+			// while the write() call itself still happens synchronously here.
+			if (typeof ClipboardItem !== 'undefined') {
+				await navigator.clipboard.write([
+					new ClipboardItem({
+						'text/plain': buildShareUrl().then((url) => new Blob([url], { type: 'text/plain' }))
+					})
+				]);
+			} else {
+				await navigator.clipboard.writeText(await buildShareUrl());
+			}
+			flashLinkStatus('copied');
+		} catch {
+			// Compression unsupported, clipboard permission denied, or (most
+			// commonly on iOS) navigator.clipboard simply absent because the
+			// page isn't served over HTTPS/localhost - all look the same from
+			// here, so just tell the user it didn't work rather than staying
+			// silent.
+			flashLinkStatus('failed');
+		}
 	}
 
 	// Mirrors SequencerRow's hold-to-remove pattern: clearing wipes every row's
@@ -257,6 +305,19 @@
 			onclick={() => (settingsOpen = true)}
 		>
 			⚙
+		</button>
+		<button
+			type="button"
+			class="copy-link-btn"
+			class:failed={linkStatus === 'failed'}
+			aria-label={linkStatus === 'copied'
+				? 'Link copied'
+				: linkStatus === 'failed'
+					? 'Copy failed'
+					: 'Copy share link'}
+			onclick={copyShareLink}
+		>
+			{linkStatus === 'copied' ? '✓' : linkStatus === 'failed' ? '🚫' : '🔗'}
 		</button>
 		<button
 			type="button"
@@ -442,6 +503,25 @@
 	}
 
 	.cog-btn:hover {
+		background: var(--color-surface);
+	}
+
+	.copy-link-btn {
+		width: 2.25rem;
+		height: 2.25rem;
+		border-radius: 0.375rem;
+		border: 1px solid var(--color-border);
+		background: var(--color-surface-raised);
+		color: var(--color-text);
+		font-size: 1rem;
+	}
+
+	.copy-link-btn.failed {
+		border-color: var(--color-danger, #b8433a);
+		color: var(--color-danger, #b8433a);
+	}
+
+	.copy-link-btn:hover {
 		background: var(--color-surface);
 	}
 

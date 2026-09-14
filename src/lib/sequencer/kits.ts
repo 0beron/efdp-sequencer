@@ -42,12 +42,13 @@ export const KITS: Kit[] = [
 		name: '909',
 		samples: [
 			sample('kick-909.wav'),
-			sample('kick-909-2.wav'),
 			sample('snare-909.wav'),
-			sample('snare-9092.wav'),
 			sample('closed-hh-909.wav'),
 			sample('open-hh-909.wav'),
-			sample('clap-909.wav')
+			sample('clap-909.wav'),
+			sample('shaker3.wav'),
+			sample('rimshot-909.wav'),
+			sample('crash-909.wav')
 		]
 	},
 	{
@@ -55,11 +56,13 @@ export const KITS: Kit[] = [
 		name: 'Acoustic',
 		samples: [
 			sample('kick-aco.wav'),
+			sample('snare-aco.wav'),
 			sample('closed-hh-aco.wav'),
 			sample('open-hh-aco.wav'),
 			sample('clap-aco.wav'),
-			sample('tom-hi-aco.wav'),
-			sample('tom-med-aco.wav')
+			sample('shaker-aco.wav'),
+			sample('cowbell2.wav'),
+			sample('crash-aco.wav')
 		]
 	},
 	{

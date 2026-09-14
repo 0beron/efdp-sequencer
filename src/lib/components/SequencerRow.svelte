@@ -379,6 +379,7 @@
 									onSoundChange?.();
 								}}
 								displayValue={formatFrequency(normalizedToFilterFrequency(row.highpassCutoff))}
+								invertFill
 							/>
 
 							<Fader

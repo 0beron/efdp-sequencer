@@ -3,7 +3,7 @@
 	import { browser } from '$app/environment';
 	import { asset } from '$app/paths';
 	import { SequencerEngine } from '$lib/sequencer/engine.svelte';
-	import { createRow } from '$lib/sequencer/types';
+	import { createRow, setLength } from '$lib/sequencer/types';
 	import SequencerRow, { type OverlayKind } from '$lib/components/SequencerRow.svelte';
 	import { loadSampleLibrary, type SampleEntry } from '$lib/sequencer/sampleLibrary';
 	import { KITS, type Kit } from '$lib/sequencer/kits';
@@ -30,9 +30,29 @@
 	let forceWide = $state(browser ? localStorage.getItem(FORCE_WIDE_KEY) === 'true' : false);
 	let settingsOpen = $state(false);
 
+	// Write-only broadcast: applies to every row's length on interaction, but
+	// doesn't track any single row's value afterwards (rows can drift apart
+	// again via their own individual length controls).
+	let globalRowLength = $state(16);
+
 	function onForceWideChange(e: Event & { currentTarget: HTMLInputElement }) {
 		forceWide = e.currentTarget.checked;
 		if (browser) localStorage.setItem(FORCE_WIDE_KEY, String(forceWide));
+	}
+
+	function setAllRowLengths(newLength: number) {
+		for (const voice of engine.rows) setLength(voice.row, newLength);
+	}
+
+	function shortenGlobalRowLength() {
+		if (globalRowLength <= 1) return;
+		globalRowLength -= 1;
+		setAllRowLengths(globalRowLength);
+	}
+
+	function lengthenGlobalRowLength() {
+		globalRowLength += 1;
+		setAllRowLengths(globalRowLength);
 	}
 
 	function navigateOverlay(fromRowId: string, kind: OverlayKind, direction: 1 | -1) {
@@ -380,6 +400,30 @@
 					Wide layout
 				</label>
 
+				<div class="stepper-control">
+					<span class="stepper-label">Global row length</span>
+					<div class="stepper-buttons">
+						<button
+							type="button"
+							class="control-btn"
+							aria-label="Shorten all rows by one step"
+							disabled={globalRowLength <= 1}
+							onclick={shortenGlobalRowLength}
+						>
+							←
+						</button>
+						<span class="stepper-value">{globalRowLength}</span>
+						<button
+							type="button"
+							class="control-btn"
+							aria-label="Lengthen all rows by one step"
+							onclick={lengthenGlobalRowLength}
+						>
+							→
+						</button>
+					</div>
+				</div>
+
 				<section class="kits">
 					<h3>Kits</h3>
 					<div class="kit-list">
@@ -602,6 +646,51 @@
 	.wide-toggle input {
 		width: 1.25rem;
 		height: 1.25rem;
+	}
+
+	.stepper-control {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.35rem;
+		padding: 0.5rem 0.75rem;
+		border-radius: 0.5rem;
+		background: var(--color-surface);
+		width: fit-content;
+		margin-top: 1.5rem;
+	}
+
+	.stepper-label {
+		font-size: 0.9rem;
+		text-align: center;
+	}
+
+	.stepper-buttons {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.stepper-value {
+		min-width: 2.5rem;
+		text-align: center;
+		font-size: 0.9rem;
+	}
+
+	.control-btn {
+		width: 1rem;
+		height: 1.75rem;
+		border-radius: 0.375rem;
+		border: 1px solid var(--color-border);
+		background: var(--color-surface);
+		color: var(--color-text);
+		font-size: 0.85rem;
+		line-height: 1;
+		padding: 0;
+	}
+
+	.control-btn:disabled {
+		opacity: 0.35;
 	}
 
 	.kits {

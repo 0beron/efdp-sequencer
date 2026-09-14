@@ -4,17 +4,24 @@
 		onChange,
 		label,
 		ariaLabel,
-		displayValue
+		displayValue,
+		invertFill = false
 	}: {
 		value: number;
 		onChange: (value: number) => void;
 		label: string;
 		ariaLabel: string;
 		displayValue: string;
+		// When true, the fill hangs from the top of the track down to the value
+		// line instead of rising from the bottom, e.g. for a highpass cutoff
+		// where the filled area should represent the frequencies kept (above cutoff).
+		invertFill?: boolean;
 	} = $props();
 
 	let track: HTMLDivElement | undefined = $state();
 	let dragging = $state(false);
+
+	const HANDLE_HEIGHT_PX = 4;
 
 	// The whole track rectangle is the drag surface (not just a thumb), so the
 	// touch target is as large as the fader itself rather than a few-px handle.
@@ -64,6 +71,7 @@
 	<span class="fader-label">{label}</span>
 	<div
 		class="fader-track"
+		class:invert={invertFill}
 		bind:this={track}
 		role="slider"
 		tabindex="0"
@@ -78,7 +86,14 @@
 		onpointercancel={onPointerUp}
 		onkeydown={onKeydown}
 	>
-		<div class="fader-fill" style={`height: ${value * 100}%`}></div>
+		<div
+			class="fader-fill"
+			style={`height: ${(invertFill ? 1 - value : value) * 100}%`}
+		></div>
+		<div
+			class="fader-handle"
+			style={`height: ${HANDLE_HEIGHT_PX}px; bottom: clamp(0px, calc(${value * 100}% - ${HANDLE_HEIGHT_PX / 2}px), calc(100% - ${HANDLE_HEIGHT_PX}px))`}
+		></div>
 	</div>
 	<span class="fader-value">{displayValue}</span>
 </div>
@@ -122,9 +137,21 @@
 		overflow: hidden;
 	}
 
+	.fader-track.invert {
+		align-items: flex-start;
+	}
+
 	.fader-fill {
 		width: 100%;
 		background: var(--color-accent);
+		pointer-events: none;
+	}
+
+	.fader-handle {
+		position: absolute;
+		left: 0;
+		right: 0;
+		background: var(--color-highlight);
 		pointer-events: none;
 	}
 </style>

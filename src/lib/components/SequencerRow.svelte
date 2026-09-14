@@ -39,6 +39,8 @@
 		row,
 		currentStep = -1,
 		gridMarkerEvery = 4,
+		pageOffset = 0,
+		stepsPerPage = 16,
 		openOverlay = null,
 		onOverlayChange,
 		onNavigateOverlay,
@@ -49,6 +51,11 @@
 		row: Row;
 		currentStep?: number;
 		gridMarkerEvery?: number;
+		// Absolute step index the currently-viewed page starts at, and how many
+		// steps a page holds - both owned by the parent page so every row's
+		// grid stays in lockstep on the same page.
+		pageOffset?: number;
+		stepsPerPage?: number;
 		openOverlay?: OverlayKind | null;
 		onOverlayChange?: (kind: OverlayKind | null) => void;
 		onNavigateOverlay?: (direction: 1 | -1) => void;
@@ -60,18 +67,39 @@
 		onSoundChange?: () => void;
 	} = $props();
 
-	// One marker per interior group boundary - every `gridMarkerEvery` steps,
-	// but not before the very first pad (that edge doesn't need a divider).
-	// Each carries both a portrait-grid (4-col) and landscape-grid (16-col)
-	// column, since the pad grid's own column count - and therefore which
-	// column a given step boundary falls on - changes at that breakpoint;
-	// CSS picks whichever applies via the same media query as .steps below.
+	// How many of this page's slots the row actually has steps for - a row
+	// shorter than the current page's range (or entirely past it) just
+	// renders fewer/zero cells, same convention as a short row already using
+	// fewer than the grid's full column count today.
+	let visibleStepCount = $derived(Math.max(0, Math.min(stepsPerPage, row.length - pageOffset)));
+
+	// Caps each breakpoint's grid column count at the page size, so a page
+	// smaller than the breakpoint's natural width (e.g. an 8-step page in the
+	// 16-wide landscape layout) fills cleanly instead of leaving the unused
+	// columns as a permanent blank gap. At the default stepsPerPage of 16/4
+	// these equal the breakpoints' own natural widths, so nothing changes
+	// from today's fixed values.
+	let narrowCols = $derived(Math.max(1, Math.min(4, stepsPerPage)));
+	let wideCols = $derived(Math.max(1, Math.min(16, stepsPerPage)));
+	let colsStyle = $derived(`--narrow-cols: ${narrowCols}; --wide-cols: ${wideCols}`);
+
+	// One marker per interior group boundary - every `gridMarkerEvery` steps
+	// *absolute* across the whole row, but not before the very first pad of
+	// the page (that edge doesn't need a divider) and never past the row's
+	// own length. Positions are page-local (0-based within the current page)
+	// since the grid itself always starts at column 1 for whichever page is
+	// showing; with pageOffset 0 this is identical to marking every absolute
+	// multiple of gridMarkerEvery. Each carries both a portrait-grid (4-col)
+	// and landscape-grid (16-col) column, since the pad grid's own column
+	// count - and therefore which column a given boundary falls on - changes
+	// at that breakpoint; CSS picks whichever applies via the same media
+	// query as .steps below.
 	let markerSteps = $derived(
 		gridMarkerEvery > 0
-			? Array.from(
-					{ length: Math.max(0, Math.ceil(row.length / gridMarkerEvery) - 1) },
-					(_, i) => (i + 1) * gridMarkerEvery
-				)
+			? Array.from({ length: Math.max(0, stepsPerPage - 1) }, (_, i) => i + 1).filter((local) => {
+					const abs = pageOffset + local;
+					return abs % gridMarkerEvery === 0 && abs < row.length;
+				})
 			: []
 	);
 
@@ -228,17 +256,18 @@
 		{row.name}
 	</button>
 
-	<div class="steps-wrap">
+	<div class="steps-wrap" style={colsStyle}>
 		<div class="step-markers" aria-hidden="true">
-			{#each markerSteps as pad (pad)}
+			{#each markerSteps as local (local)}
 				<span
 					class="step-marker"
-					style={`--col-narrow: ${(pad % 4) + 1}; --col-wide: ${(pad % 16) + 1}`}
+					style={`--col-narrow: ${(local % 4) + 1}; --col-wide: ${(local % 16) + 1}`}
 				></span>
 			{/each}
 		</div>
 		<div class="steps">
-			{#each Array.from({ length: row.length }) as _, step (step)}
+			{#each Array.from({ length: visibleStepCount }) as _, i (pageOffset + i)}
+				{@const step = pageOffset + i}
 				<button
 					type="button"
 					class="step"
@@ -497,8 +526,9 @@
 					</button>
 				</header>
 
-				<div class="step-grid">
-					{#each Array.from({ length: row.length }) as _, step (step)}
+				<div class="step-grid" style={colsStyle}>
+					{#each Array.from({ length: visibleStepCount }) as _, i (pageOffset + i)}
+						{@const step = pageOffset + i}
 						{#if isStepActive(row, step)}
 							<StepFader
 								value={getVelocity(row, step)}
@@ -542,8 +572,9 @@
 					</button>
 				</header>
 
-				<div class="step-grid">
-					{#each Array.from({ length: row.length }) as _, step (step)}
+				<div class="step-grid" style={colsStyle}>
+					{#each Array.from({ length: visibleStepCount }) as _, i (pageOffset + i)}
+						{@const step = pageOffset + i}
 						{#if isStepActive(row, step)}
 							<StepFader
 								value={getProbability(row, step)}
@@ -587,8 +618,9 @@
 					</button>
 				</header>
 
-				<div class="step-grid">
-					{#each Array.from({ length: row.length }) as _, step (step)}
+				<div class="step-grid" style={colsStyle}>
+					{#each Array.from({ length: visibleStepCount }) as _, i (pageOffset + i)}
+						{@const step = pageOffset + i}
 						{#if isStepActive(row, step)}
 							<StepIterationControl
 								n={getIterationN(row, step)}
@@ -655,13 +687,13 @@
 		position: relative;
 		z-index: 1;
 		display: grid;
-		grid-template-columns: repeat(4, 1fr);
+		grid-template-columns: repeat(var(--narrow-cols, 4), 1fr);
 		gap: 0.35rem;
 	}
 
 	@media (orientation: landscape) {
 		.steps {
-			grid-template-columns: repeat(16, 1fr);
+			grid-template-columns: repeat(var(--wide-cols, 16), 1fr);
 		}
 	}
 
@@ -670,7 +702,7 @@
 	   stack — orientation itself still rotates normally, this just widens
 	   the grid regardless of it. Kept in sync with the landscape query above. */
 	:global(.force-wide) .steps {
-		grid-template-columns: repeat(16, 1fr);
+		grid-template-columns: repeat(var(--wide-cols, 16), 1fr);
 	}
 
 	/* Purely decorative grid-line dividers, laid out in their own grid (not
@@ -685,7 +717,7 @@
 		inset: 0;
 		z-index: 0;
 		display: grid;
-		grid-template-columns: repeat(4, 1fr);
+		grid-template-columns: repeat(var(--narrow-cols, 4), 1fr);
 		grid-template-rows: 1fr;
 		gap: 0.35rem;
 		pointer-events: none;
@@ -693,12 +725,12 @@
 
 	@media (orientation: landscape) {
 		.step-markers {
-			grid-template-columns: repeat(16, 1fr);
+			grid-template-columns: repeat(var(--wide-cols, 16), 1fr);
 		}
 	}
 
 	:global(.force-wide) .step-markers {
-		grid-template-columns: repeat(16, 1fr);
+		grid-template-columns: repeat(var(--wide-cols, 16), 1fr);
 	}
 
 	/* --col-narrow/--col-wide are set per-marker from markerSteps; whichever
@@ -776,14 +808,14 @@
 		flex: 1;
 		min-height: 0;
 		display: grid;
-		grid-template-columns: repeat(4, 1fr);
+		grid-template-columns: repeat(var(--narrow-cols, 4), 1fr);
 		grid-auto-rows: 1fr;
 		gap: 0.5rem;
 	}
 
 	@media (orientation: landscape) {
 		.step-grid {
-			grid-template-columns: repeat(16, 1fr);
+			grid-template-columns: repeat(var(--wide-cols, 16), 1fr);
 			/* Left offset of .steps within .row (5rem: row-name 4.5rem + one
 			   0.5rem row gap), minus the overlay-switcher's own footprint
 			   (1.75rem button + 0.5rem gap) since the switcher sits to the left
@@ -796,7 +828,7 @@
 
 	/* See the .steps override above. */
 	:global(.force-wide) .step-grid {
-		grid-template-columns: repeat(16, 1fr);
+		grid-template-columns: repeat(var(--wide-cols, 16), 1fr);
 		padding-left: 2.75rem;
 		gap: 0.35rem;
 	}

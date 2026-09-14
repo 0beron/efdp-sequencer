@@ -3,7 +3,12 @@
 	import { browser } from '$app/environment';
 	import { asset } from '$app/paths';
 	import { SequencerEngine } from '$lib/sequencer/engine.svelte';
-	import { createRow, setLength } from '$lib/sequencer/types';
+	import {
+		createRow,
+		setLength,
+		totalPageCount,
+		appendStepsCopyingFrom
+	} from '$lib/sequencer/types';
 	import SequencerRow, { type OverlayKind } from '$lib/components/SequencerRow.svelte';
 	import { loadSampleLibrary, type SampleEntry } from '$lib/sequencer/sampleLibrary';
 	import { KITS, type Kit } from '$lib/sequencer/kits';
@@ -43,6 +48,82 @@
 		browser ? (Number(localStorage.getItem(GRID_MARKER_KEY)) || 4) : 4
 	);
 
+	// How many steps a page shows at once - a display preference like
+	// gridMarkerEvery/forceWide (doesn't change the pattern, only how much of
+	// it is shown at a time), so it's persisted the same way and deliberately
+	// left out of the shareable link - a recipient should see the pattern at
+	// their own preferred page size, not the sender's.
+	const STEPS_PER_PAGE_KEY = 'efdp-steps-per-page';
+	function clampStepsPerPage(value: number): number {
+		return Math.min(16, Math.max(1, Math.round(value)));
+	}
+	let stepsPerPage = $state(
+		browser ? clampStepsPerPage(Number(localStorage.getItem(STEPS_PER_PAGE_KEY)) || 16) : 16
+	);
+
+	// Which page of the pattern is currently being viewed - transient, not
+	// persisted (resets to page 1 on reload, like scroll position would).
+	let currentPage = $state(0);
+	let pageCount = $derived(
+		totalPageCount(
+			engine.rows.map((voice) => voice.row),
+			engine.sequenceLength,
+			stepsPerPage
+		)
+	);
+	let pageOffset = $derived(currentPage * stepsPerPage);
+
+	// Clamps to the new last page (not back to page 1) whenever pageCount
+	// shrinks - e.g. a row got shorter, sequence length dropped, or steps-per-
+	// page rose. A $derived can't have side effects, hence the $effect.
+	$effect(() => {
+		if (currentPage > pageCount - 1) currentPage = Math.max(0, pageCount - 1);
+	});
+
+	// Jumps to the newly created page once every row's length (and the
+	// sequence length) has actually grown to cover it - recomputed directly
+	// rather than read off the `pageCount` derived, since a freshly mutated
+	// $state's dependent $derived is only guaranteed fresh on next read, and
+	// we want the definitely-post-mutation value here.
+	function goToNewLastPage() {
+		currentPage =
+			totalPageCount(
+				engine.rows.map((voice) => voice.row),
+				engine.sequenceLength,
+				stepsPerPage
+			) - 1;
+	}
+
+	// Adds one page's worth of blank steps to every row and to the overall
+	// sequence length. Every row grows by the same amount (not just rows that
+	// already differ from the sequence length) so each row's own offset from
+	// the sequence length - the polyrhythm "drift" a shorter/longer row
+	// already has - stays exactly the same after the new page is added.
+	// New steps come in blank for free: setLength only fills genuinely new
+	// indices, leaving already-existing triggers untouched.
+	function addBlankPage() {
+		if (engine.playing) return;
+		const pageSize = stepsPerPage;
+		for (const voice of engine.rows) setLength(voice.row, voice.row.length + pageSize);
+		engine.setSequenceLength(engine.sequenceLength + pageSize);
+		goToNewLastPage();
+	}
+
+	// Same page-size extension as addBlankPage, but the new steps are
+	// populated by copying whichever page is currently the sequencer's last
+	// one (captured as `lastPageOffset` before anything is resized) instead
+	// of starting blank - a "duplicate this page" action.
+	function addPageCopyingLastPage() {
+		if (engine.playing) return;
+		const pageSize = stepsPerPage;
+		const lastPageOffset = (pageCount - 1) * pageSize;
+		for (const voice of engine.rows) {
+			appendStepsCopyingFrom(voice.row, pageSize, lastPageOffset);
+		}
+		engine.setSequenceLength(engine.sequenceLength + pageSize);
+		goToNewLastPage();
+	}
+
 	function onForceWideChange(e: Event & { currentTarget: HTMLInputElement }) {
 		forceWide = e.currentTarget.checked;
 		if (browser) localStorage.setItem(FORCE_WIDE_KEY, String(forceWide));
@@ -74,6 +155,26 @@
 		if (browser) localStorage.setItem(GRID_MARKER_KEY, String(gridMarkerEvery));
 	}
 
+	function shortenSequenceLength() {
+		if (engine.sequenceLength <= 1) return;
+		engine.setSequenceLength(engine.sequenceLength - 1);
+	}
+
+	function lengthenSequenceLength() {
+		engine.setSequenceLength(engine.sequenceLength + 1);
+	}
+
+	function shortenStepsPerPage() {
+		if (stepsPerPage <= 1) return;
+		stepsPerPage = clampStepsPerPage(stepsPerPage - 1);
+		if (browser) localStorage.setItem(STEPS_PER_PAGE_KEY, String(stepsPerPage));
+	}
+
+	function lengthenStepsPerPage() {
+		stepsPerPage = clampStepsPerPage(stepsPerPage + 1);
+		if (browser) localStorage.setItem(STEPS_PER_PAGE_KEY, String(stepsPerPage));
+	}
+
 	function navigateOverlay(fromRowId: string, kind: OverlayKind, direction: 1 | -1) {
 		const ids = engine.rows.map((voice) => voice.row.id);
 		const currentIndex = ids.indexOf(fromRowId);
@@ -97,6 +198,7 @@
 		const saved = fromUrl ?? (browser ? loadPersistedState() : null);
 		if (saved && saved.rows.length > 0) {
 			engine.setBpm(saved.bpm);
+			engine.setSequenceLength(saved.sequenceLength);
 			const library = await loadSampleLibrary();
 			const byId = new Map(library.map((s) => [s.id, s]));
 			for (const row of saved.rows) {
@@ -135,9 +237,10 @@
 	$effect(() => {
 		if (!ready) return;
 		const bpm = engine.bpm;
+		const sequenceLength = engine.sequenceLength;
 		const rows = engine.snapshotRows();
-		schedulePersist(bpm, rows);
-		scheduleUrlSync(bpm, rows);
+		schedulePersist(bpm, sequenceLength, rows);
+		scheduleUrlSync(bpm, sequenceLength, rows);
 	});
 
 	async function toggle() {
@@ -169,7 +272,7 @@
 	let linkStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
 	function buildShareUrl(): Promise<string> {
-		return encodeStateToFragment(engine.bpm, engine.snapshotRows()).then(
+		return encodeStateToFragment(engine.bpm, engine.sequenceLength, engine.snapshotRows()).then(
 			(fragment) => `${location.origin}${location.pathname}#${fragment}`
 		);
 	}
@@ -254,6 +357,7 @@
 			if (browser) {
 				localStorage.removeItem(FORCE_WIDE_KEY);
 				localStorage.removeItem(GRID_MARKER_KEY);
+				localStorage.removeItem(STEPS_PER_PAGE_KEY);
 				location.assign(location.pathname);
 			}
 		}, FULL_RESET_HOLD_MS);
@@ -273,7 +377,9 @@
 	function addRow() {
 		if (engine.playing) return;
 		const id = crypto.randomUUID();
-		engine.addBlankRow(createRow({ id, name: 'New Row', sampleId: '' }));
+		engine.addBlankRow(
+			createRow({ id, name: 'New Row', sampleId: '', length: engine.sequenceLength })
+		);
 		activeOverlay = { rowId: id, kind: 'sample' };
 	}
 
@@ -307,6 +413,46 @@
 		if (e.key === 'Escape' && settingsOpen) settingsOpen = false;
 	}}
 />
+
+{#snippet pageNavControls()}
+	<button
+		type="button"
+		class="control-btn page-nav-btn"
+		disabled={currentPage === 0}
+		aria-label="Previous page"
+		onclick={() => currentPage--}
+	>
+		‹
+	</button>
+	<span class="page-nav-label">Page {currentPage + 1} / {pageCount}</span>
+	<button
+		type="button"
+		class="control-btn page-nav-btn"
+		disabled={currentPage === pageCount - 1}
+		aria-label="Next page"
+		onclick={() => currentPage++}
+	>
+		›
+	</button>
+	<button
+		type="button"
+		class="control-btn page-nav-btn"
+		disabled={engine.playing}
+		aria-label="Add a blank page"
+		onclick={addBlankPage}
+	>
+		+
+	</button>
+	<button
+		type="button"
+		class="control-btn page-nav-btn"
+		disabled={engine.playing}
+		aria-label="Add a page, copying the last page's contents"
+		onclick={addPageCopyingLastPage}
+	>
+		⧉
+	</button>
+{/snippet}
 
 <div class="page" class:force-wide={forceWide}>
 	<div class="header">
@@ -368,6 +514,9 @@
 			</button>
 			<span class="bpm-label">BPM</span>
 		</div>
+		<div class="page-nav page-nav-header">
+			{@render pageNavControls()}
+		</div>
 	</div>
 
 	<div class="toolbar">
@@ -407,12 +556,18 @@
 		</button>
 	</div>
 
+	<div class="page-nav page-nav-inline">
+		{@render pageNavControls()}
+	</div>
+
 	<div class="rows">
 		{#each engine.rows as voice (voice.row.id)}
 			<SequencerRow
 				row={voice.row}
 				currentStep={engine.currentSteps[voice.row.id] ?? -1}
 				{gridMarkerEvery}
+				{pageOffset}
+				{stepsPerPage}
 				openOverlay={activeOverlay?.rowId === voice.row.id ? activeOverlay.kind : null}
 				onOverlayChange={(kind) => (activeOverlay = kind ? { rowId: voice.row.id, kind } : null)}
 				onNavigateOverlay={(direction) =>
@@ -455,7 +610,56 @@
 				</label>
 
 				<div class="stepper-control">
-					<span class="stepper-label">Global row length</span>
+					<span class="stepper-label">Total sequence length</span>
+					<div class="stepper-buttons">
+						<button
+							type="button"
+							class="control-btn"
+							aria-label="Shorten total sequence length by one step"
+							disabled={engine.sequenceLength <= 1}
+							onclick={shortenSequenceLength}
+						>
+							←
+						</button>
+						<span class="stepper-value">{engine.sequenceLength}</span>
+						<button
+							type="button"
+							class="control-btn"
+							aria-label="Lengthen total sequence length by one step"
+							onclick={lengthenSequenceLength}
+						>
+							→
+						</button>
+					</div>
+				</div>
+
+				<div class="stepper-control">
+					<span class="stepper-label">Max steps per page</span>
+					<div class="stepper-buttons">
+						<button
+							type="button"
+							class="control-btn"
+							aria-label="Decrease max steps per page"
+							disabled={stepsPerPage <= 1}
+							onclick={shortenStepsPerPage}
+						>
+							←
+						</button>
+						<span class="stepper-value">{stepsPerPage}</span>
+						<button
+							type="button"
+							class="control-btn"
+							aria-label="Increase max steps per page"
+							disabled={stepsPerPage >= 16}
+							onclick={lengthenStepsPerPage}
+						>
+							→
+						</button>
+					</div>
+				</div>
+
+				<div class="stepper-control">
+					<span class="stepper-label">Set all row lengths</span>
 					<div class="stepper-buttons">
 						<button
 							type="button"
@@ -563,6 +767,7 @@
 	.header {
 		display: flex;
 		align-items: center;
+		flex-wrap: wrap;
 		gap: 0.75rem;
 	}
 
@@ -852,6 +1057,60 @@
 
 	.kit-btn:not(:disabled):hover {
 		background: var(--color-surface);
+	}
+
+	.page-nav {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+	}
+
+	/* Below the toolbar, own centered row - the default (portrait) position. */
+	.page-nav-inline {
+		margin-top: 1rem;
+		justify-content: center;
+	}
+
+	/* Folded into the header next to the BPM controls instead, once there's
+	   room for it (landscape, or portrait with wide layout forced on) - see
+	   the media query/force-wide overrides below, which swap which of the
+	   two page-nav copies is actually shown. */
+	.page-nav-header {
+		display: none;
+	}
+
+	@media (orientation: landscape) {
+		.page-nav-header {
+			display: flex;
+		}
+
+		.page-nav-inline {
+			display: none;
+		}
+	}
+
+	:global(.force-wide) .page-nav-header {
+		display: flex;
+	}
+
+	:global(.force-wide) .page-nav-inline {
+		display: none;
+	}
+
+	.page-nav-label {
+		min-width: 6rem;
+		text-align: center;
+		font-size: 0.9rem;
+		color: var(--color-text);
+	}
+
+	/* Wider than the default .control-btn (used by the compact +/- steppers)
+	   since these are the primary way to move around a multi-page pattern and
+	   get pressed far more often - worth a bigger, easier-to-hit target. */
+	.page-nav-btn {
+		width: 2.75rem;
+		height: 2.25rem;
+		font-size: 1.1rem;
 	}
 
 	.rows {

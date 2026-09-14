@@ -16,6 +16,10 @@ const SCHEMA_VERSION = 1;
 interface RawPersistedState {
 	version: number;
 	bpm: number;
+	// Optional so pre-existing saves without it still parse (see
+	// parsePersistedState's default-to-16 handling below) - additive, no
+	// SCHEMA_VERSION bump needed.
+	sequenceLength?: number;
 	rows: unknown[];
 }
 
@@ -58,9 +62,12 @@ function isPersistedState(value: unknown): value is RawPersistedState {
 }
 
 // Shared by the localStorage and URL-hash loaders: turns parsed-but-unverified
-// JSON into a real { bpm, rows } once it's confirmed to be current-version and
-// well-shaped, hydrating each row the same way regardless of where it came from.
-function parsePersistedState(parsed: unknown): { bpm: number; rows: Row[] } | null {
+// JSON into a real { bpm, sequenceLength, rows } once it's confirmed to be
+// current-version and well-shaped, hydrating each row the same way regardless
+// of where it came from.
+function parsePersistedState(
+	parsed: unknown
+): { bpm: number; sequenceLength: number; rows: Row[] } | null {
 	if (!isPersistedState(parsed)) return null;
 	const rows = parsed.rows
 		.filter(
@@ -68,13 +75,17 @@ function parsePersistedState(parsed: unknown): { bpm: number; rows: Row[] } | nu
 				typeof row === 'object' && row !== null && typeof (row as Row).id === 'string'
 		)
 		.map(hydrateRow);
-	return { bpm: parsed.bpm, rows };
+	const sequenceLength =
+		typeof parsed.sequenceLength === 'number' && parsed.sequenceLength > 0
+			? Math.round(parsed.sequenceLength)
+			: 16;
+	return { bpm: parsed.bpm, sequenceLength, rows };
 }
 
 // Returns null for anything that isn't a validly-shaped, current-version
 // save - a missing key, corrupt JSON, and an old version all look the same
 // from here: just start fresh.
-export function loadPersistedState(): { bpm: number; rows: Row[] } | null {
+export function loadPersistedState(): { bpm: number; sequenceLength: number; rows: Row[] } | null {
 	try {
 		const raw = localStorage.getItem(STORAGE_KEY);
 		if (!raw) return null;
@@ -101,10 +112,10 @@ let saveTimeout: ReturnType<typeof setTimeout> | undefined;
 
 // Debounced so rapid changes (dragging a fader, holding a step toggle) don't
 // each force a synchronous localStorage write on the main thread.
-export function schedulePersist(bpm: number, rows: Row[]): void {
+export function schedulePersist(bpm: number, sequenceLength: number, rows: Row[]): void {
 	clearTimeout(saveTimeout);
 	saveTimeout = setTimeout(() => {
-		const state: RawPersistedState = { version: SCHEMA_VERSION, bpm, rows };
+		const state: RawPersistedState = { version: SCHEMA_VERSION, bpm, sequenceLength, rows };
 		try {
 			localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 		} catch {
@@ -160,8 +171,12 @@ async function gunzip(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayB
 
 // Encodes the current pattern for the URL hash. Can throw (e.g. on a browser
 // without CompressionStream) - callers decide how to degrade.
-export async function encodeStateToFragment(bpm: number, rows: Row[]): Promise<string> {
-	const state: RawPersistedState = { version: SCHEMA_VERSION, bpm, rows };
+export async function encodeStateToFragment(
+	bpm: number,
+	sequenceLength: number,
+	rows: Row[]
+): Promise<string> {
+	const state: RawPersistedState = { version: SCHEMA_VERSION, bpm, sequenceLength, rows };
 	const json = new TextEncoder().encode(JSON.stringify(state));
 	return toBase64Url(await gzip(json));
 }
@@ -171,7 +186,7 @@ export async function encodeStateToFragment(bpm: number, rows: Row[]): Promise<s
 // a stale/hand-edited/truncated link degrades to null rather than throwing.
 export async function decodeStateFromFragment(
 	fragment: string
-): Promise<{ bpm: number; rows: Row[] } | null> {
+): Promise<{ bpm: number; sequenceLength: number; rows: Row[] } | null> {
 	try {
 		const json = new TextDecoder().decode(await gunzip(fromBase64Url(fragment)));
 		return parsePersistedState(JSON.parse(json));
@@ -187,10 +202,10 @@ let urlSyncTimeout: ReturnType<typeof setTimeout> | undefined;
 // synchronous per-keystroke call would pile up. Uses replaceState (not
 // pushState) so every edit doesn't spam browser history with one entry each;
 // the address bar still always reflects the latest pattern for copying.
-export function scheduleUrlSync(bpm: number, rows: Row[]): void {
+export function scheduleUrlSync(bpm: number, sequenceLength: number, rows: Row[]): void {
 	clearTimeout(urlSyncTimeout);
 	urlSyncTimeout = setTimeout(() => {
-		encodeStateToFragment(bpm, rows)
+		encodeStateToFragment(bpm, sequenceLength, rows)
 			.then((fragment) => {
 				history.replaceState(null, '', `#${fragment}`);
 			})

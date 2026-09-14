@@ -28,6 +28,10 @@ export class SequencerEngine {
 	currentSteps = $state<Record<string, number>>({});
 	playing = $state(false);
 	bpm = $state(120);
+	// Declared overall pattern length. Purely an editing/paging concept in v1 -
+	// playback still wraps each row independently at its own `row.length`
+	// (see onPulse below), so this has no effect on what actually plays.
+	sequenceLength = $state(16);
 
 	private pulse = 0;
 	// Per-row, per-trigger-index count of active passes reached so far, cycling
@@ -139,13 +143,13 @@ export class SequencerEngine {
 	}
 
 	// Resets every row's grid, velocity/probability/iteration, faders, filters,
-	// choke group and length (back to 16 steps) - leaves each row's sample,
-	// name and subdivision untouched. Also clears iteration counters so a
-	// still-running loop doesn't carry over stale pass counts for the wiped
-	// triggers.
+	// choke group and length (back to the pattern's sequence length) - leaves
+	// each row's sample, name and subdivision untouched. Also clears iteration
+	// counters so a still-running loop doesn't carry over stale pass counts
+	// for the wiped triggers.
 	clearAll(): void {
 		for (const voice of this.rows) {
-			resetRow(voice.row);
+			resetRow(voice.row, this.sequenceLength);
 			this.iterationCounters.set(voice.row.id, new Map());
 		}
 	}
@@ -153,6 +157,10 @@ export class SequencerEngine {
 	setBpm(bpm: number): void {
 		this.bpm = bpm;
 		Tone.getTransport().bpm.value = bpm;
+	}
+
+	setSequenceLength(value: number): void {
+		this.sequenceLength = Math.max(1, Math.round(value));
 	}
 
 	// Plain-data snapshot of every row's own state, suitable for JSON

@@ -48,6 +48,19 @@ export function totalSubsteps(row: Pick<Row, 'length' | 'subdivision'>): number 
 	return row.length * row.subdivision;
 }
 
+// How many pages the sequencer view needs: enough to cover the longest row,
+// even if that's longer than the nominal sequence length - a row set longer
+// than the pattern's declared length must still be fully reachable via the
+// shared page selector.
+export function totalPageCount(
+	rows: Pick<Row, 'length'>[],
+	sequenceLength: number,
+	stepsPerPage: number
+): number {
+	const longest = rows.reduce((max, row) => Math.max(max, row.length), sequenceLength);
+	return Math.max(1, Math.ceil(longest / Math.max(1, stepsPerPage)));
+}
+
 export function triggerIndex(row: Pick<Row, 'subdivision'>, step: number, substep = 0): number {
 	return step * row.subdivision + substep;
 }
@@ -90,9 +103,10 @@ export function createRow(options: {
 // Resets a row's grid and per-row controls back to their created-row defaults,
 // leaving identity (id/name/sampleId) and subdivision untouched — backs the
 // header's "clear" action, which must not disturb loaded samples. Length is
-// reset to 16 steps along with everything else the clear action wipes.
-export function resetRow(row: Row): void {
-	row.length = 16;
+// reset to the pattern's current sequence length (defaulting to 16, matching
+// createRow) along with everything else the clear action wipes.
+export function resetRow(row: Row, length = 16): void {
+	row.length = length;
 	row.triggers = Array.from({ length: row.length * row.subdivision }, () => ({
 		active: false,
 		velocity: 1,
@@ -284,6 +298,30 @@ export function setLength(row: Row, newLength: number): void {
 	);
 	row.length = newLength;
 	row.triggers = newTriggers;
+}
+
+// Extends a row by `count` steps, populating the new steps by copying the
+// existing steps starting at `copyFromStep` (e.g. the sequencer's current
+// last page) instead of leaving them blank - backs the "duplicate last page"
+// action. A row shorter than the range being copied from simply has nothing
+// there to copy (triggerIndex on an out-of-range source resolves to
+// undefined), so its new steps come in blank the same as setLength would
+// already leave them - this naturally preserves a shorter row's own
+// shortness rather than back-filling it with copied content.
+export function appendStepsCopyingFrom(row: Row, count: number, copyFromStep: number): void {
+	const oldLength = row.length;
+	setLength(row, oldLength + count);
+	for (let i = 0; i < count; i++) {
+		const sourceStep = copyFromStep + i;
+		const destStep = oldLength + i;
+		for (let substep = 0; substep < row.subdivision; substep++) {
+			const source = row.triggers[triggerIndex(row, sourceStep, substep)];
+			const destIndex = triggerIndex(row, destStep, substep);
+			if (source && row.triggers[destIndex]) {
+				row.triggers[destIndex] = { ...source };
+			}
+		}
+	}
 }
 
 export function setSubdivision(row: Row, newSubdivision: number): void {

@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { Row } from '$lib/sequencer/types';
 	import Fader from '$lib/components/Fader.svelte';
+	import EnvelopeGraph from '$lib/components/EnvelopeGraph.svelte';
+	import FilterResponseGraph from '$lib/components/FilterResponseGraph.svelte';
 	import StepFader from '$lib/components/StepFader.svelte';
 	import StepIterationControl from '$lib/components/StepIterationControl.svelte';
 	import SamplePicker from '$lib/components/SamplePicker.svelte';
@@ -36,6 +38,7 @@
 	let {
 		row,
 		currentStep = -1,
+		gridMarkerEvery = 4,
 		openOverlay = null,
 		onOverlayChange,
 		onNavigateOverlay,
@@ -45,6 +48,7 @@
 	}: {
 		row: Row;
 		currentStep?: number;
+		gridMarkerEvery?: number;
 		openOverlay?: OverlayKind | null;
 		onOverlayChange?: (kind: OverlayKind | null) => void;
 		onNavigateOverlay?: (direction: 1 | -1) => void;
@@ -55,6 +59,21 @@
 		// unheard until the row's next trigger.
 		onSoundChange?: () => void;
 	} = $props();
+
+	// One marker per interior group boundary - every `gridMarkerEvery` steps,
+	// but not before the very first pad (that edge doesn't need a divider).
+	// Each carries both a portrait-grid (4-col) and landscape-grid (16-col)
+	// column, since the pad grid's own column count - and therefore which
+	// column a given step boundary falls on - changes at that breakpoint;
+	// CSS picks whichever applies via the same media query as .steps below.
+	let markerSteps = $derived(
+		gridMarkerEvery > 0
+			? Array.from(
+					{ length: Math.max(0, Math.ceil(row.length / gridMarkerEvery) - 1) },
+					(_, i) => (i + 1) * gridMarkerEvery
+				)
+			: []
+	);
 
 	function setOverlay(kind: OverlayKind | null) {
 		onOverlayChange?.(kind);
@@ -209,21 +228,31 @@
 		{row.name}
 	</button>
 
-	<div class="steps">
-		{#each Array.from({ length: row.length }) as _, step (step)}
-			<button
-				type="button"
-				class="step"
-				class:active={isStepActive(row, step)}
-				class:playing={currentStep === step}
-				style={isStepActive(row, step)
-					? `--velocity: ${velocityIntensity(getVelocity(row, step))}`
-					: undefined}
-				aria-pressed={isStepActive(row, step)}
-				aria-label={`${row.name} step ${step + 1}`}
-				onclick={() => toggleTrigger(row, step)}
-			></button>
-		{/each}
+	<div class="steps-wrap">
+		<div class="step-markers" aria-hidden="true">
+			{#each markerSteps as pad (pad)}
+				<span
+					class="step-marker"
+					style={`--col-narrow: ${(pad % 4) + 1}; --col-wide: ${(pad % 16) + 1}`}
+				></span>
+			{/each}
+		</div>
+		<div class="steps">
+			{#each Array.from({ length: row.length }) as _, step (step)}
+				<button
+					type="button"
+					class="step"
+					class:active={isStepActive(row, step)}
+					class:playing={currentStep === step}
+					style={isStepActive(row, step)
+						? `--velocity: ${velocityIntensity(getVelocity(row, step))}`
+						: undefined}
+					aria-pressed={isStepActive(row, step)}
+					aria-label={`${row.name} step ${step + 1}`}
+					onclick={() => toggleTrigger(row, step)}
+				></button>
+			{/each}
+		</div>
 	</div>
 </div>
 
@@ -328,70 +357,83 @@
 								displayValue={`${Math.round(row.gain * 100)}%`}
 							/>
 
-							<Fader
-								label="Attack"
-								ariaLabel={`${row.name} attack`}
-								value={row.attack}
-								onChange={(v) => setAttack(row, v)}
-								displayValue={`${Math.round(row.attack * MAX_ATTACK_SECONDS * 1000)} ms`}
-							/>
+							<div class="envelope-group">
+								<EnvelopeGraph attack={row.attack} decay={row.decay} />
+								<div class="envelope-faders">
+									<Fader
+										label="Attack"
+										ariaLabel={`${row.name} attack`}
+										value={row.attack}
+										onChange={(v) => setAttack(row, v)}
+										displayValue={`${Math.round(row.attack * MAX_ATTACK_SECONDS * 1000)} ms`}
+									/>
 
-							<Fader
-								label="Decay"
-								ariaLabel={`${row.name} decay`}
-								value={row.decay}
-								onChange={(v) => setDecay(row, v)}
-								displayValue={row.decay >= 1
-									? 'MAX'
-									: `${Math.round(row.decay * MAX_DECAY_SECONDS * 1000)} ms`}
-							/>
+									<Fader
+										label="Decay"
+										ariaLabel={`${row.name} decay`}
+										value={row.decay}
+										onChange={(v) => setDecay(row, v)}
+										displayValue={row.decay >= 1
+											? 'MAX'
+											: `${Math.round(row.decay * MAX_DECAY_SECONDS * 1000)} ms`}
+									/>
+								</div>
+							</div>
 						</div>
 
-						<div class="fader-row">
-							<Fader
-								label="Lo Cutoff"
-								ariaLabel={`${row.name} low pass cutoff`}
-								value={row.lowpassCutoff}
-								onChange={(v) => {
-									setLowpassCutoff(row, v);
-									onSoundChange?.();
-								}}
-								displayValue={formatFrequency(normalizedToFilterFrequency(row.lowpassCutoff))}
+						<div class="filter-group">
+							<FilterResponseGraph
+								lowpassCutoff={row.lowpassCutoff}
+								lowpassResonance={row.lowpassResonance}
+								highpassCutoff={row.highpassCutoff}
+								highpassResonance={row.highpassResonance}
 							/>
+							<div class="filter-faders">
+								<Fader
+									label="Lo Cutoff"
+									ariaLabel={`${row.name} low pass cutoff`}
+									value={row.lowpassCutoff}
+									onChange={(v) => {
+										setLowpassCutoff(row, v);
+										onSoundChange?.();
+									}}
+									displayValue={formatFrequency(normalizedToFilterFrequency(row.lowpassCutoff))}
+								/>
 
-							<Fader
-								label="Lo Reso"
-								ariaLabel={`${row.name} low pass resonance`}
-								value={row.lowpassResonance}
-								onChange={(v) => {
-									setLowpassResonance(row, v);
-									onSoundChange?.();
-								}}
-								displayValue={normalizedToFilterQ(row.lowpassResonance).toFixed(1)}
-							/>
+								<Fader
+									label="Lo Reso"
+									ariaLabel={`${row.name} low pass resonance`}
+									value={row.lowpassResonance}
+									onChange={(v) => {
+										setLowpassResonance(row, v);
+										onSoundChange?.();
+									}}
+									displayValue={normalizedToFilterQ(row.lowpassResonance).toFixed(1)}
+								/>
 
-							<Fader
-								label="Hi Cutoff"
-								ariaLabel={`${row.name} high pass cutoff`}
-								value={row.highpassCutoff}
-								onChange={(v) => {
-									setHighpassCutoff(row, v);
-									onSoundChange?.();
-								}}
-								displayValue={formatFrequency(normalizedToFilterFrequency(row.highpassCutoff))}
-								invertFill
-							/>
+								<Fader
+									label="Hi Cutoff"
+									ariaLabel={`${row.name} high pass cutoff`}
+									value={row.highpassCutoff}
+									onChange={(v) => {
+										setHighpassCutoff(row, v);
+										onSoundChange?.();
+									}}
+									displayValue={formatFrequency(normalizedToFilterFrequency(row.highpassCutoff))}
+									invertFill
+								/>
 
-							<Fader
-								label="Hi Reso"
-								ariaLabel={`${row.name} high pass resonance`}
-								value={row.highpassResonance}
-								onChange={(v) => {
-									setHighpassResonance(row, v);
-									onSoundChange?.();
-								}}
-								displayValue={normalizedToFilterQ(row.highpassResonance).toFixed(1)}
-							/>
+								<Fader
+									label="Hi Reso"
+									ariaLabel={`${row.name} high pass resonance`}
+									value={row.highpassResonance}
+									onChange={(v) => {
+										setHighpassResonance(row, v);
+										onSoundChange?.();
+									}}
+									displayValue={normalizedToFilterQ(row.highpassResonance).toFixed(1)}
+								/>
+							</div>
 						</div>
 					</div>
 				</div>
@@ -603,9 +645,15 @@
 		font-size: 0.9rem;
 	}
 
-	.steps {
+	.steps-wrap {
 		flex: 1;
 		min-width: 0;
+		position: relative;
+	}
+
+	.steps {
+		position: relative;
+		z-index: 1;
 		display: grid;
 		grid-template-columns: repeat(4, 1fr);
 		gap: 0.35rem;
@@ -623,6 +671,60 @@
 	   the grid regardless of it. Kept in sync with the landscape query above. */
 	:global(.force-wide) .steps {
 		grid-template-columns: repeat(16, 1fr);
+	}
+
+	/* Purely decorative grid-line dividers, laid out in their own grid (not
+	   mixed into .steps) so they can be placed on exact column lines without
+	   fighting the pads' own auto-placement, and sized to always span the
+	   pads grid's full rendered height regardless of how many rows the pads
+	   themselves wrap into. Mirrors .steps' column count/gap at each
+	   breakpoint so a marker's line falls exactly between the pads on either
+	   side of it, not inside either one. */
+	.step-markers {
+		position: absolute;
+		inset: 0;
+		z-index: 0;
+		display: grid;
+		grid-template-columns: repeat(4, 1fr);
+		grid-template-rows: 1fr;
+		gap: 0.35rem;
+		pointer-events: none;
+	}
+
+	@media (orientation: landscape) {
+		.step-markers {
+			grid-template-columns: repeat(16, 1fr);
+		}
+	}
+
+	:global(.force-wide) .step-markers {
+		grid-template-columns: repeat(16, 1fr);
+	}
+
+	/* --col-narrow/--col-wide are set per-marker from markerSteps; whichever
+	   applies at the current breakpoint mirrors .steps' own column switch
+	   above. justify-self:start plants the marker's left edge on the grid
+	   line itself (the boundary between the gap and this column); shifting
+	   left by half its own width plus half the gap (matching .steps' gap
+	   above) centers it in the gap instead of hugging the pad that follows. */
+	.step-marker {
+		grid-row: 1;
+		grid-column: var(--col-narrow);
+		justify-self: start;
+		width: 2px;
+		height: 100%;
+		background: var(--color-border);
+		transform: translateX(calc(-50% - 0.175rem));
+	}
+
+	@media (orientation: landscape) {
+		.step-marker {
+			grid-column: var(--col-wide);
+		}
+	}
+
+	:global(.force-wide) .step-marker {
+		grid-column: var(--col-wide);
 	}
 
 	.step {
@@ -929,6 +1031,56 @@
 	}
 
 	.fader-row {
+		flex: 1;
+		min-height: 0;
+		display: flex;
+		gap: 1rem;
+		justify-content: center;
+	}
+
+	/* Groups the attack/decay pair with their shared envelope diagram above
+	   them, so the graph reads as belonging to both faders rather than
+	   floating over the whole fader-row (which also holds Volume). */
+	.envelope-group {
+		display: flex;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 0.5rem;
+		height: 100%;
+	}
+
+	.envelope-faders {
+		flex: 1;
+		min-height: 0;
+		display: flex;
+		gap: 1rem;
+	}
+
+	/* Takes over the top-level-child role .fader-row otherwise plays directly
+	   under .controls-section (equal share in portrait, auto-width side by
+	   side in landscape), now that this slot holds a graph above its faders
+	   instead of just the faders. */
+	.filter-group {
+		flex: 1;
+		min-height: 0;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 0.5rem;
+	}
+
+	@media (orientation: landscape) {
+		.filter-group {
+			flex: 0 1 auto;
+		}
+	}
+
+	:global(.force-wide) .filter-group {
+		flex: 0 1 auto;
+	}
+
+	.filter-faders {
 		flex: 1;
 		min-height: 0;
 		display: flex;

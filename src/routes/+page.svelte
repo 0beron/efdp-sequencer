@@ -12,7 +12,8 @@
 		schedulePersist,
 		decodeStateFromFragment,
 		encodeStateToFragment,
-		scheduleUrlSync
+		scheduleUrlSync,
+		clearPersistedState
 	} from '$lib/sequencer/persistence';
 
 	const engine = new SequencerEngine();
@@ -35,6 +36,13 @@
 	// again via their own individual length controls).
 	let globalRowLength = $state(16);
 
+	// Display preference (like forceWide), not a one-off broadcast: persisted
+	// so it stays put across reloads instead of resetting to the default.
+	const GRID_MARKER_KEY = 'efdp-grid-marker-every';
+	let gridMarkerEvery = $state(
+		browser ? (Number(localStorage.getItem(GRID_MARKER_KEY)) || 4) : 4
+	);
+
 	function onForceWideChange(e: Event & { currentTarget: HTMLInputElement }) {
 		forceWide = e.currentTarget.checked;
 		if (browser) localStorage.setItem(FORCE_WIDE_KEY, String(forceWide));
@@ -53,6 +61,17 @@
 	function lengthenGlobalRowLength() {
 		globalRowLength += 1;
 		setAllRowLengths(globalRowLength);
+	}
+
+	function shortenGridMarkerEvery() {
+		if (gridMarkerEvery <= 1) return;
+		gridMarkerEvery -= 1;
+		if (browser) localStorage.setItem(GRID_MARKER_KEY, String(gridMarkerEvery));
+	}
+
+	function lengthenGridMarkerEvery() {
+		gridMarkerEvery += 1;
+		if (browser) localStorage.setItem(GRID_MARKER_KEY, String(gridMarkerEvery));
 	}
 
 	function navigateOverlay(fromRowId: string, kind: OverlayKind, direction: 1 | -1) {
@@ -214,6 +233,40 @@
 		}
 	}
 
+	// Full reset, as opposed to the clear button above: wipes the autosaved
+	// pattern *and* the display prefs (wide layout, grid marker spacing), then
+	// reloads with no URL hash so ensureLoaded() falls all the way through to
+	// the default kit, same as a first-ever visit. Reloading (rather than
+	// resetting in-memory state by hand) is what actually makes this a *full*
+	// reset - just stripping the hash and staying on the page would still
+	// restore the old pattern from localStorage on the very next autosave-driven
+	// read, since nothing else would have cleared it.
+	const FULL_RESET_HOLD_MS = 1000;
+	let fullResetHoldTimer: ReturnType<typeof setTimeout> | null = null;
+	let fullResetting = $state(false);
+
+	function beginFullResetHold() {
+		fullResetting = true;
+		fullResetHoldTimer = setTimeout(() => {
+			fullResetHoldTimer = null;
+			fullResetting = false;
+			clearPersistedState();
+			if (browser) {
+				localStorage.removeItem(FORCE_WIDE_KEY);
+				localStorage.removeItem(GRID_MARKER_KEY);
+				location.assign(location.pathname);
+			}
+		}, FULL_RESET_HOLD_MS);
+	}
+
+	function cancelFullResetHold() {
+		fullResetting = false;
+		if (fullResetHoldTimer !== null) {
+			clearTimeout(fullResetHoldTimer);
+			fullResetHoldTimer = null;
+		}
+	}
+
 	// A brand new row starts with no sample loaded, and its sample overlay is
 	// opened immediately so the user picks one right away rather than seeing
 	// a silent, unlabeled row sit in the list.
@@ -359,6 +412,7 @@
 			<SequencerRow
 				row={voice.row}
 				currentStep={engine.currentSteps[voice.row.id] ?? -1}
+				{gridMarkerEvery}
 				openOverlay={activeOverlay?.rowId === voice.row.id ? activeOverlay.kind : null}
 				onOverlayChange={(kind) => (activeOverlay = kind ? { rowId: voice.row.id, kind } : null)}
 				onNavigateOverlay={(direction) =>
@@ -424,6 +478,30 @@
 					</div>
 				</div>
 
+				<div class="stepper-control">
+					<span class="stepper-label">Grid marker every...</span>
+					<div class="stepper-buttons">
+						<button
+							type="button"
+							class="control-btn"
+							aria-label="Decrease grid marker spacing"
+							disabled={gridMarkerEvery <= 1}
+							onclick={shortenGridMarkerEvery}
+						>
+							←
+						</button>
+						<span class="stepper-value">{gridMarkerEvery}</span>
+						<button
+							type="button"
+							class="control-btn"
+							aria-label="Increase grid marker spacing"
+							onclick={lengthenGridMarkerEvery}
+						>
+							→
+						</button>
+					</div>
+				</div>
+
 				<section class="kits">
 					<h3>Kits</h3>
 					<div class="kit-list">
@@ -439,6 +517,20 @@
 						{/each}
 					</div>
 				</section>
+
+				<button
+					type="button"
+					class="full-reset-btn"
+					class:holding={fullResetting}
+					aria-label="Hold to fully reset: clears the pattern, layout and grid marker settings"
+					onpointerdown={beginFullResetHold}
+					onpointerup={cancelFullResetHold}
+					onpointerleave={cancelFullResetHold}
+					onpointercancel={cancelFullResetHold}
+				>
+					<span class="full-reset-btn-fill"></span>
+					<span class="full-reset-btn-label">Hold to fully reset</span>
+				</button>
 			</div>
 		</div>
 	{/if}
@@ -597,6 +689,41 @@
 	}
 
 	.clear-btn-icon {
+		position: relative;
+		z-index: 1;
+	}
+
+	/* Same hold-to-confirm fill as .clear-btn above, but full-width and
+	   labeled since it lives in the settings list rather than the toolbar -
+	   and set apart with margin since it's the most destructive action here,
+	   wiping the pattern *and* every other setting in this panel. */
+	.full-reset-btn {
+		position: relative;
+		overflow: hidden;
+		width: 100%;
+		height: 2.5rem;
+		margin-top: 1.5rem;
+		border-radius: 0.375rem;
+		border: 1px solid var(--color-danger, #b8433a);
+		background: var(--color-surface);
+		color: var(--color-text);
+		font-size: 0.9rem;
+	}
+
+	.full-reset-btn-fill {
+		position: absolute;
+		inset: 0;
+		width: 0%;
+		background: var(--color-danger, #b8433a);
+		pointer-events: none;
+	}
+
+	.full-reset-btn.holding .full-reset-btn-fill {
+		width: 100%;
+		transition: width 1s linear;
+	}
+
+	.full-reset-btn-label {
 		position: relative;
 		z-index: 1;
 	}

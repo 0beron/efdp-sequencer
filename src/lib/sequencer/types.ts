@@ -166,12 +166,14 @@ export function getEnvelopeParams(row: Pick<Row, 'attack' | 'decay'>): EnvelopeP
 }
 
 // Per-step velocity fader is normalized 0..1; this scales it to a player volume
-// in dB. Linear (not exponential) since it's a direct gain trim, not a frequency.
+// in dB. Quadratic (not linear) so the top of the fader's travel trims gently
+// and attenuation accelerates toward -Infinity as it nears 0 - a linear mapping
+// left only the top quarter of the fader feeling useful before it went too quiet.
 export const MIN_VELOCITY_DB = -36;
 
 export function velocityToDb(value: number): number {
 	if (value <= 0) return -Infinity;
-	return MIN_VELOCITY_DB * (1 - value);
+	return MIN_VELOCITY_DB * (1 - value) ** 2;
 }
 
 // Fader values are normalized 0..1; these scale them to actual filter frequency/Q.

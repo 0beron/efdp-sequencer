@@ -84,6 +84,19 @@ export function loadPersistedState(): { bpm: number; rows: Row[] } | null {
 	}
 }
 
+// Wipes the autosaved pattern so the next load falls through to the default
+// kit, same as a first-ever visit. Doesn't touch the URL hash or any other
+// localStorage key (e.g. display prefs) - callers that want those cleared
+// too need to do that themselves.
+export function clearPersistedState(): void {
+	try {
+		localStorage.removeItem(STORAGE_KEY);
+	} catch {
+		// localStorage disabled (e.g. private browsing) - nothing was saved
+		// in the first place, so there's nothing to clear.
+	}
+}
+
 let saveTimeout: ReturnType<typeof setTimeout> | undefined;
 
 // Debounced so rapid changes (dragging a fader, holding a step toggle) don't

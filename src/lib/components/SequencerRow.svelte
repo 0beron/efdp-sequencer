@@ -41,9 +41,13 @@
 		gridMarkerEvery = 4,
 		pageOffset = 0,
 		stepsPerPage = 16,
+		currentPage = 0,
+		pageCount = 1,
 		openOverlay = null,
+		defaultOverlayKind = 'settings',
 		onOverlayChange,
 		onNavigateOverlay,
+		onChangePage,
 		onChooseSample,
 		onRemoveRow,
 		onSoundChange
@@ -56,9 +60,20 @@
 		// grid stays in lockstep on the same page.
 		pageOffset?: number;
 		stepsPerPage?: number;
+		// Which page is currently showing and how many pages exist - same
+		// parent-owned page state as pageOffset/stepsPerPage, surfaced here so
+		// the overlay header can offer its own compact page nav without every
+		// row losing sync with the main page controls.
+		currentPage?: number;
+		pageCount?: number;
 		openOverlay?: OverlayKind | null;
+		// Which overlay page to land on when opening from closed (e.g. clicking
+		// the row name) - owned by the parent so it can remember the last page
+		// viewed across every row, not just this one.
+		defaultOverlayKind?: OverlayKind;
 		onOverlayChange?: (kind: OverlayKind | null) => void;
 		onNavigateOverlay?: (direction: 1 | -1) => void;
+		onChangePage?: (direction: 1 | -1) => void;
 		onChooseSample?: (sample: SampleEntry) => Promise<void> | void;
 		onRemoveRow?: () => void;
 		// Called after a filter/gain fader changes so the engine can push it to
@@ -76,12 +91,23 @@
 	// Caps each breakpoint's grid column count at the page size, so a page
 	// smaller than the breakpoint's natural width (e.g. an 8-step page in the
 	// 16-wide landscape layout) fills cleanly instead of leaving the unused
-	// columns as a permanent blank gap. At the default stepsPerPage of 16/4
-	// these equal the breakpoints' own natural widths, so nothing changes
-	// from today's fixed values.
-	let narrowCols = $derived(Math.max(1, Math.min(4, stepsPerPage)));
+	// columns as a permanent blank gap. Portrait wraps at gridMarkerEvery
+	// itself (falling back to 4 if markers are off) rather than a fixed 4, so
+	// the pad grid's row breaks always land exactly on a marker line instead
+	// of the two drifting apart.
+	let narrowCols = $derived(
+		Math.max(1, Math.min(gridMarkerEvery > 0 ? gridMarkerEvery : 4, stepsPerPage))
+	);
 	let wideCols = $derived(Math.max(1, Math.min(16, stepsPerPage)));
-	let colsStyle = $derived(`--narrow-cols: ${narrowCols}; --wide-cols: ${wideCols}`);
+	// How many rows the pad grid itself wraps into at each breakpoint, so the
+	// marker overlay grid below can mirror that row count and give each
+	// marker line a single row-tall cell instead of stretching the full
+	// (possibly multi-row) grid height.
+	let narrowRows = $derived(Math.max(1, Math.ceil(visibleStepCount / narrowCols)));
+	let wideRows = $derived(Math.max(1, Math.ceil(visibleStepCount / wideCols)));
+	let colsStyle = $derived(
+		`--narrow-cols: ${narrowCols}; --wide-cols: ${wideCols}; --narrow-rows: ${narrowRows}; --wide-rows: ${wideRows}`
+	);
 
 	// One marker per interior group boundary - every `gridMarkerEvery` steps
 	// *absolute* across the whole row, but not before the very first pad of
@@ -89,11 +115,11 @@
 	// own length. Positions are page-local (0-based within the current page)
 	// since the grid itself always starts at column 1 for whichever page is
 	// showing; with pageOffset 0 this is identical to marking every absolute
-	// multiple of gridMarkerEvery. Each carries both a portrait-grid (4-col)
-	// and landscape-grid (16-col) column, since the pad grid's own column
-	// count - and therefore which column a given boundary falls on - changes
-	// at that breakpoint; CSS picks whichever applies via the same media
-	// query as .steps below.
+	// multiple of gridMarkerEvery. Each carries both a portrait-grid and
+	// landscape-grid row/column, since the pad grid's own column count - and
+	// therefore which cell a given boundary falls in - changes at that
+	// breakpoint; CSS picks whichever applies via the same media query as
+	// .steps below.
 	let markerSteps = $derived(
 		gridMarkerEvery > 0
 			? Array.from({ length: Math.max(0, stepsPerPage - 1) }, (_, i) => i + 1).filter((local) => {
@@ -238,6 +264,30 @@
 	</button>
 {/snippet}
 
+{#snippet compactPageNav()}
+	<div class="compact-page-nav" role="group" aria-label="Page">
+		<button
+			type="button"
+			class="control-btn compact-page-nav-btn"
+			disabled={currentPage === 0}
+			aria-label="Previous page"
+			onclick={() => onChangePage?.(-1)}
+		>
+			‹
+		</button>
+		<span class="compact-page-nav-label">Pg {currentPage + 1}/{pageCount}</span>
+		<button
+			type="button"
+			class="control-btn compact-page-nav-btn"
+			disabled={currentPage === pageCount - 1}
+			aria-label="Next page"
+			onclick={() => onChangePage?.(1)}
+		>
+			›
+		</button>
+	</div>
+{/snippet}
+
 <svelte:window
 	onkeydown={(e) => {
 		if (e.key !== 'Escape') return;
@@ -251,7 +301,7 @@
 		class="row-name"
 		use:fitText
 		aria-label={`${row.name} settings`}
-		onclick={() => setOverlay('settings')}
+		onclick={() => setOverlay(defaultOverlayKind)}
 	>
 		{row.name}
 	</button>
@@ -261,7 +311,7 @@
 			{#each markerSteps as local (local)}
 				<span
 					class="step-marker"
-					style={`--col-narrow: ${(local % 4) + 1}; --col-wide: ${(local % 16) + 1}`}
+					style={`--col-narrow: ${(local % narrowCols) + 1}; --row-narrow: ${Math.floor(local / narrowCols) + 1}; --col-wide: ${(local % wideCols) + 1}; --row-wide: ${Math.floor(local / wideCols) + 1}`}
 				></span>
 			{/each}
 		</div>
@@ -298,6 +348,7 @@
 						{@render overlayNav(1)}
 					</div>
 					<div class="header-actions">
+						{@render compactPageNav()}
 						<button
 							type="button"
 							class="remove-btn"
@@ -329,7 +380,7 @@
 							<div class="stepper-buttons">
 								<button
 									type="button"
-									class="control-btn"
+									class="control-btn stepper-btn"
 									aria-label={`Shorten ${row.name} by one step`}
 									disabled={row.length <= 1}
 									onclick={shorten}
@@ -339,7 +390,7 @@
 								<span class="stepper-value">{row.length}</span>
 								<button
 									type="button"
-									class="control-btn"
+									class="control-btn stepper-btn"
 									aria-label={`Lengthen ${row.name} by one step`}
 									onclick={lengthen}
 								>
@@ -353,7 +404,7 @@
 							<div class="stepper-buttons">
 								<button
 									type="button"
-									class="control-btn"
+									class="control-btn stepper-btn"
 									aria-label={`Decrease ${row.name} choke group`}
 									disabled={row.chokeGroup <= 0}
 									onclick={() => setChokeGroup(row, row.chokeGroup - 1)}
@@ -363,7 +414,7 @@
 								<span class="stepper-value">{row.chokeGroup === 0 ? 'None' : row.chokeGroup}</span>
 								<button
 									type="button"
-									class="control-btn"
+									class="control-btn stepper-btn"
 									aria-label={`Increase ${row.name} choke group`}
 									onclick={() => setChokeGroup(row, row.chokeGroup + 1)}
 								>
@@ -483,14 +534,17 @@
 						<h2>{row.name} Sample</h2>
 						{@render overlayNav(1)}
 					</div>
-					<button
-						type="button"
-						class="close-btn"
-						aria-label="Close sample picker"
-						onclick={() => setOverlay(null)}
-					>
-						✕
-					</button>
+					<div class="header-actions">
+						{@render compactPageNav()}
+						<button
+							type="button"
+							class="close-btn"
+							aria-label="Close sample picker"
+							onclick={() => setOverlay(null)}
+						>
+							✕
+						</button>
+					</div>
 				</header>
 
 				<SamplePicker currentSampleId={row.sampleId} onChoose={chooseSample} />
@@ -516,14 +570,17 @@
 						<h2>{row.name} Velocity</h2>
 						{@render overlayNav(1)}
 					</div>
-					<button
-						type="button"
-						class="close-btn"
-						aria-label="Close velocity"
-						onclick={() => setOverlay(null)}
-					>
-						✕
-					</button>
+					<div class="header-actions">
+						{@render compactPageNav()}
+						<button
+							type="button"
+							class="close-btn"
+							aria-label="Close velocity"
+							onclick={() => setOverlay(null)}
+						>
+							✕
+						</button>
+					</div>
 				</header>
 
 				<div class="step-grid" style={colsStyle}>
@@ -562,14 +619,17 @@
 						<h2>{row.name} Probability</h2>
 						{@render overlayNav(1)}
 					</div>
-					<button
-						type="button"
-						class="close-btn"
-						aria-label="Close probability"
-						onclick={() => setOverlay(null)}
-					>
-						✕
-					</button>
+					<div class="header-actions">
+						{@render compactPageNav()}
+						<button
+							type="button"
+							class="close-btn"
+							aria-label="Close probability"
+							onclick={() => setOverlay(null)}
+						>
+							✕
+						</button>
+					</div>
 				</header>
 
 				<div class="step-grid" style={colsStyle}>
@@ -608,14 +668,17 @@
 						<h2>{row.name} Iteration</h2>
 						{@render overlayNav(1)}
 					</div>
-					<button
-						type="button"
-						class="close-btn"
-						aria-label="Close iteration"
-						onclick={() => setOverlay(null)}
-					>
-						✕
-					</button>
+					<div class="header-actions">
+						{@render compactPageNav()}
+						<button
+							type="button"
+							class="close-btn"
+							aria-label="Close iteration"
+							onclick={() => setOverlay(null)}
+						>
+							✕
+						</button>
+					</div>
 				</header>
 
 				<div class="step-grid" style={colsStyle}>
@@ -660,6 +723,14 @@
 
 	.control-btn:disabled {
 		opacity: 0.35;
+	}
+
+	/* Wider than the base .control-btn (used as-is by the row-nav and compact
+	   page-nav arrows above) - these are the Length/Choke Group +/- steppers,
+	   pressed often enough to deserve a bigger, easier-to-hit target, in line
+	   with the wide page-nav buttons in +page.svelte. */
+	.stepper-btn {
+		width: 2.25rem;
 	}
 
 	.row-name {
@@ -707,18 +778,17 @@
 
 	/* Purely decorative grid-line dividers, laid out in their own grid (not
 	   mixed into .steps) so they can be placed on exact column lines without
-	   fighting the pads' own auto-placement, and sized to always span the
-	   pads grid's full rendered height regardless of how many rows the pads
-	   themselves wrap into. Mirrors .steps' column count/gap at each
-	   breakpoint so a marker's line falls exactly between the pads on either
-	   side of it, not inside either one. */
+	   fighting the pads' own auto-placement. Mirrors .steps' column *and* row
+	   count/gap at each breakpoint, so each marker's cell lines up exactly
+	   with the pad row it belongs to instead of stretching across every row
+	   the pads wrap into. */
 	.step-markers {
 		position: absolute;
 		inset: 0;
 		z-index: 0;
 		display: grid;
 		grid-template-columns: repeat(var(--narrow-cols, 4), 1fr);
-		grid-template-rows: 1fr;
+		grid-template-rows: repeat(var(--narrow-rows, 1), 1fr);
 		gap: 0.35rem;
 		pointer-events: none;
 	}
@@ -726,21 +796,25 @@
 	@media (orientation: landscape) {
 		.step-markers {
 			grid-template-columns: repeat(var(--wide-cols, 16), 1fr);
+			grid-template-rows: repeat(var(--wide-rows, 1), 1fr);
 		}
 	}
 
 	:global(.force-wide) .step-markers {
 		grid-template-columns: repeat(var(--wide-cols, 16), 1fr);
+		grid-template-rows: repeat(var(--wide-rows, 1), 1fr);
 	}
 
-	/* --col-narrow/--col-wide are set per-marker from markerSteps; whichever
-	   applies at the current breakpoint mirrors .steps' own column switch
-	   above. justify-self:start plants the marker's left edge on the grid
-	   line itself (the boundary between the gap and this column); shifting
-	   left by half its own width plus half the gap (matching .steps' gap
-	   above) centers it in the gap instead of hugging the pad that follows. */
+	/* --col-narrow/--row-narrow (and their -wide counterparts) are set per-
+	   marker from markerSteps; whichever pair applies at the current
+	   breakpoint mirrors .steps' own column switch above, confining the line
+	   to a single pad-tall cell. justify-self:start plants the marker's left
+	   edge on the grid line itself (the boundary between the gap and this
+	   column); shifting left by half its own width plus half the gap
+	   (matching .steps' gap above) centers it in the gap instead of hugging
+	   the pad that follows. */
 	.step-marker {
-		grid-row: 1;
+		grid-row: var(--row-narrow, 1);
 		grid-column: var(--col-narrow);
 		justify-self: start;
 		width: 2px;
@@ -751,11 +825,13 @@
 
 	@media (orientation: landscape) {
 		.step-marker {
+			grid-row: var(--row-wide, 1);
 			grid-column: var(--col-wide);
 		}
 	}
 
 	:global(.force-wide) .step-marker {
+		grid-row: var(--row-wide, 1);
 		grid-column: var(--col-wide);
 	}
 
@@ -920,7 +996,27 @@
 	.header-actions {
 		display: flex;
 		align-items: center;
+		gap: 0.75rem;
 		flex-shrink: 0;
+	}
+
+	.compact-page-nav {
+		display: flex;
+		align-items: center;
+		gap: 0.375rem;
+	}
+
+	.compact-page-nav-btn {
+		width: 1.75rem;
+		height: 1.75rem;
+		font-size: 0.9rem;
+	}
+
+	.compact-page-nav-label {
+		min-width: 2.75rem;
+		text-align: center;
+		font-size: 0.75rem;
+		color: var(--color-text);
 	}
 
 	.close-btn {

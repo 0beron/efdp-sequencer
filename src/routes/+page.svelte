@@ -27,6 +27,12 @@
 
 	let activeOverlay: { rowId: string; kind: OverlayKind } | null = $state(null);
 
+	// Remembers whichever overlay page (settings/sample/velocity/...) was last
+	// viewed, across rows and across closing the overlay entirely, so opening
+	// any row's overlay picks up where the last one left off instead of always
+	// landing back on the settings page.
+	let lastOverlayKind: OverlayKind = $state('settings');
+
 	// Lets a tablet held in portrait opt into the landscape (16-across) row
 	// layout instead of the cramped 4x4 stack meant for phones; orientation
 	// still rotates normally, this just overrides the layout it picks. Tucked
@@ -35,11 +41,6 @@
 	const FORCE_WIDE_KEY = 'efdp-force-wide-layout';
 	let forceWide = $state(browser ? localStorage.getItem(FORCE_WIDE_KEY) === 'true' : false);
 	let settingsOpen = $state(false);
-
-	// Write-only broadcast: applies to every row's length on interaction, but
-	// doesn't track any single row's value afterwards (rows can drift apart
-	// again via their own individual length controls).
-	let globalRowLength = $state(16);
 
 	// Display preference (like forceWide), not a one-off broadcast: persisted
 	// so it stays put across reloads instead of resetting to the default.
@@ -124,24 +125,25 @@
 		goToNewLastPage();
 	}
 
+	// Inverse of addBlankPage: shrinks every row by one page's worth of steps
+	// (floored at 1, same minimum the per-row length stepper already enforces)
+	// and drops the sequence length to match, discarding whatever was on the
+	// rightmost page. A no-op with only one page left, since there'd be
+	// nothing left to show. If the page being removed was the one in view,
+	// the existing pageCount-clamping effect drops currentPage back onto the
+	// new last page on its own.
+	function removeLastPage() {
+		if (engine.playing || pageCount <= 1) return;
+		const pageSize = stepsPerPage;
+		for (const voice of engine.rows) {
+			setLength(voice.row, Math.max(1, voice.row.length - pageSize));
+		}
+		engine.setSequenceLength(engine.sequenceLength - pageSize);
+	}
+
 	function onForceWideChange(e: Event & { currentTarget: HTMLInputElement }) {
 		forceWide = e.currentTarget.checked;
 		if (browser) localStorage.setItem(FORCE_WIDE_KEY, String(forceWide));
-	}
-
-	function setAllRowLengths(newLength: number) {
-		for (const voice of engine.rows) setLength(voice.row, newLength);
-	}
-
-	function shortenGlobalRowLength() {
-		if (globalRowLength <= 1) return;
-		globalRowLength -= 1;
-		setAllRowLengths(globalRowLength);
-	}
-
-	function lengthenGlobalRowLength() {
-		globalRowLength += 1;
-		setAllRowLengths(globalRowLength);
 	}
 
 	function shortenGridMarkerEvery() {
@@ -155,12 +157,24 @@
 		if (browser) localStorage.setItem(GRID_MARKER_KEY, String(gridMarkerEvery));
 	}
 
+	// Total sequence length is the true .length of every row, shown here as a
+	// single reference number rather than a per-row broadcast: each increment
+	// shortens/lengthens every row by one step off wherever its own length
+	// currently sits, so any drift a row already has from the others (its
+	// polyrhythmic offset) is preserved rather than being collapsed back to a
+	// uniform value. A row already at the 1-step floor simply stops shrinking
+	// while the others keep going. To force rows back in sync, adjust their
+	// individual lengths (or reset and retype the total length from scratch).
 	function shortenSequenceLength() {
 		if (engine.sequenceLength <= 1) return;
+		for (const voice of engine.rows) {
+			setLength(voice.row, Math.max(1, voice.row.length - 1));
+		}
 		engine.setSequenceLength(engine.sequenceLength - 1);
 	}
 
 	function lengthenSequenceLength() {
+		for (const voice of engine.rows) setLength(voice.row, voice.row.length + 1);
 		engine.setSequenceLength(engine.sequenceLength + 1);
 	}
 
@@ -180,6 +194,14 @@
 		const currentIndex = ids.indexOf(fromRowId);
 		const nextIndex = (currentIndex + direction + ids.length) % ids.length;
 		activeOverlay = { rowId: ids[nextIndex], kind };
+	}
+
+	// Same page state the main page-nav controls use, just driven from the
+	// compact nav inside a row's overlay - moving the page here stays in
+	// whatever overlay tab was open and reveals that tab's content for the
+	// new page (e.g. the velocity faders shift to the new page's steps).
+	function changePage(direction: 1 | -1) {
+		currentPage = Math.min(pageCount - 1, Math.max(0, currentPage + direction));
 	}
 
 	// Restores a pattern in priority order: a shared link's URL hash first (so
@@ -418,6 +440,15 @@
 	<button
 		type="button"
 		class="control-btn page-nav-btn"
+		disabled={engine.playing || pageCount <= 1}
+		aria-label="Delete last page"
+		onclick={removeLastPage}
+	>
+		−
+	</button>
+	<button
+		type="button"
+		class="control-btn page-nav-btn"
 		disabled={currentPage === 0}
 		aria-label="Previous page"
 		onclick={() => currentPage--}
@@ -455,66 +486,72 @@
 {/snippet}
 
 <div class="page" class:force-wide={forceWide}>
-	<div class="header">
-		<img class="logo" src={asset('/img/neonquaver.png')} alt="EFDP Sequencer" />
-		<button
-			class="transport"
-			onclick={toggle}
-			disabled={loading}
-			aria-label={loading ? 'Loading' : engine.playing ? 'Stop' : 'Play'}
-		>
-			{#if loading}
-				Loading…
-			{:else}
-				{engine.playing ? '■' : '▶'}
-			{/if}
-		</button>
-		<div class="bpm-control">
+	<div class="sticky-controls">
+		<div class="header">
+			<img class="logo" src={asset('/img/neonquaver.png')} alt="EFDP Sequencer" />
 			<button
-				type="button"
-				class="bpm-step"
-				onclick={() => adjustBpm(-10)}
-				aria-label="Decrease tempo by 10"
+				class="transport"
+				onclick={toggle}
+				disabled={loading}
+				aria-label={loading ? 'Loading' : engine.playing ? 'Stop' : 'Play'}
 			>
-				-10
+				{#if loading}
+					Loading…
+				{:else}
+					{engine.playing ? '■' : '▶'}
+				{/if}
 			</button>
-			<button
-				type="button"
-				class="bpm-step"
-				onclick={() => adjustBpm(-1)}
-				aria-label="Decrease tempo by 1"
-			>
-				-1
-			</button>
-			<input
-				type="number"
-				class="bpm-input"
-				min={MIN_BPM}
-				max={MAX_BPM}
-				step="1"
-				value={engine.bpm}
-				oninput={onBpmInput}
-				aria-label="Tempo in beats per minute"
-			/>
-			<button
-				type="button"
-				class="bpm-step"
-				onclick={() => adjustBpm(1)}
-				aria-label="Increase tempo by 1"
-			>
-				+1
-			</button>
-			<button
-				type="button"
-				class="bpm-step"
-				onclick={() => adjustBpm(10)}
-				aria-label="Increase tempo by 10"
-			>
-				+10
-			</button>
-			<span class="bpm-label">BPM</span>
+			<div class="bpm-control">
+				<button
+					type="button"
+					class="bpm-step"
+					onclick={() => adjustBpm(-10)}
+					aria-label="Decrease tempo by 10"
+				>
+					-10
+				</button>
+				<button
+					type="button"
+					class="bpm-step"
+					onclick={() => adjustBpm(-1)}
+					aria-label="Decrease tempo by 1"
+				>
+					-1
+				</button>
+				<input
+					type="number"
+					class="bpm-input"
+					min={MIN_BPM}
+					max={MAX_BPM}
+					step="1"
+					value={engine.bpm}
+					oninput={onBpmInput}
+					aria-label="Tempo in beats per minute"
+				/>
+				<button
+					type="button"
+					class="bpm-step"
+					onclick={() => adjustBpm(1)}
+					aria-label="Increase tempo by 1"
+				>
+					+1
+				</button>
+				<button
+					type="button"
+					class="bpm-step"
+					onclick={() => adjustBpm(10)}
+					aria-label="Increase tempo by 10"
+				>
+					+10
+				</button>
+				<span class="bpm-label">BPM</span>
+			</div>
+			<div class="page-nav page-nav-header">
+				{@render pageNavControls()}
+			</div>
 		</div>
-		<div class="page-nav page-nav-header">
+
+		<div class="page-nav page-nav-inline">
 			{@render pageNavControls()}
 		</div>
 	</div>
@@ -526,7 +563,7 @@
 			aria-label="Open settings"
 			onclick={() => (settingsOpen = true)}
 		>
-			⚙
+			<span>⚙</span> Settings
 		</button>
 		<button
 			type="button"
@@ -539,7 +576,8 @@
 					: 'Copy share link'}
 			onclick={copyShareLink}
 		>
-			{linkStatus === 'copied' ? '✓' : linkStatus === 'failed' ? '🚫' : '🔗'}
+			<span>{linkStatus === 'copied' ? '✓' : linkStatus === 'failed' ? '🚫' : '🔗'}</span>
+			{linkStatus === 'copied' ? 'Copied' : linkStatus === 'failed' ? 'Failed' : 'Copy link'}
 		</button>
 		<button
 			type="button"
@@ -553,11 +591,8 @@
 		>
 			<span class="clear-btn-fill"></span>
 			<span class="clear-btn-icon">🧹</span>
+			<span class="clear-btn-label">Clear pattern</span>
 		</button>
-	</div>
-
-	<div class="page-nav page-nav-inline">
-		{@render pageNavControls()}
 	</div>
 
 	<div class="rows">
@@ -568,10 +603,17 @@
 				{gridMarkerEvery}
 				{pageOffset}
 				{stepsPerPage}
+				{currentPage}
+				{pageCount}
 				openOverlay={activeOverlay?.rowId === voice.row.id ? activeOverlay.kind : null}
-				onOverlayChange={(kind) => (activeOverlay = kind ? { rowId: voice.row.id, kind } : null)}
+				defaultOverlayKind={lastOverlayKind}
+				onOverlayChange={(kind) => {
+					activeOverlay = kind ? { rowId: voice.row.id, kind } : null;
+					if (kind) lastOverlayKind = kind;
+				}}
 				onNavigateOverlay={(direction) =>
 					activeOverlay && navigateOverlay(voice.row.id, activeOverlay.kind, direction)}
+				onChangePage={changePage}
 				onChooseSample={(sample) => chooseSample(voice.row.id, sample)}
 				onRemoveRow={() => removeRow(voice.row.id)}
 				onSoundChange={() => engine.updateRowSound(voice.row.id)}
@@ -652,30 +694,6 @@
 							aria-label="Increase max steps per page"
 							disabled={stepsPerPage >= 16}
 							onclick={lengthenStepsPerPage}
-						>
-							→
-						</button>
-					</div>
-				</div>
-
-				<div class="stepper-control">
-					<span class="stepper-label">Set all row lengths</span>
-					<div class="stepper-buttons">
-						<button
-							type="button"
-							class="control-btn"
-							aria-label="Shorten all rows by one step"
-							disabled={globalRowLength <= 1}
-							onclick={shortenGlobalRowLength}
-						>
-							←
-						</button>
-						<span class="stepper-value">{globalRowLength}</span>
-						<button
-							type="button"
-							class="control-btn"
-							aria-label="Lengthen all rows by one step"
-							onclick={lengthenGlobalRowLength}
 						>
 							→
 						</button>
@@ -764,11 +782,29 @@
 		max-width: none;
 	}
 
+	/* Transport/bpm + page-nav stick together as one block in both
+	   orientations, so they stay reachable while scrolling a tall grid -
+	   one row in landscape (page-nav folds into .header there, and
+	   .page-nav-inline goes display:none) or two in portrait. Deliberately
+	   excludes .toolbar (settings/link/clear): that stays in normal flow so
+	   it scrolls away with the grid instead of permanently eating screen
+	   space, and keeping it out of this wrapper is also what keeps this
+	   block's height fixed - nesting it in here let its content grow the
+	   containing block and push the sticky element out from under itself. */
+	.sticky-controls {
+		position: sticky;
+		top: env(safe-area-inset-top);
+		z-index: 10;
+		background: var(--color-bg);
+		padding-bottom: 0.5rem;
+		border-bottom: 1px solid var(--color-border);
+	}
+
 	.header {
 		display: flex;
 		align-items: center;
 		flex-wrap: wrap;
-		gap: 0.75rem;
+		gap: 0.5rem;
 	}
 
 	.logo {
@@ -778,8 +814,9 @@
 	}
 
 	.transport {
-		width: 6rem;
+		width: 5rem;
 		height: 2.5rem;
+		padding: 0;
 		border-radius: 0.375rem;
 		border: 1px solid var(--color-border);
 		background: var(--color-surface-raised);
@@ -792,11 +829,14 @@
 	.bpm-control {
 		display: flex;
 		align-items: center;
-		gap: 0.4rem;
+		gap: 0.25rem;
+		padding: 0.25rem;
+		border-radius: 0.5rem;
+		background: color-mix(in srgb, var(--color-accent) 50%, transparent);
 	}
 
 	.bpm-input {
-		width: 3.5rem;
+		width: 3rem;
 		height: 2.5rem;
 		border-radius: 0.375rem;
 		border: 1px solid var(--color-border);
@@ -807,13 +847,14 @@
 	}
 
 	.bpm-step {
-		width: 2.25rem;
+		width: 2rem;
 		height: 2.5rem;
+		padding: 0;
 		border-radius: 0.375rem;
 		border: 1px solid var(--color-border);
 		background: var(--color-surface-raised);
 		color: var(--color-text);
-		font-size: 0.8rem;
+		font-size: 0.75rem;
 		cursor: pointer;
 	}
 
@@ -822,7 +863,7 @@
 	}
 
 	.bpm-label {
-		font-size: 0.85rem;
+		font-size: 0.8rem;
 		color: var(--color-text);
 	}
 
@@ -830,16 +871,23 @@
 		margin-top: 0.5rem;
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: 0.35rem;
 	}
 
 	.cog-btn {
-		width: 2.25rem;
-		height: 2.25rem;
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		height: 2.5rem;
+		padding: 0 0.75rem;
 		border-radius: 0.375rem;
 		border: 1px solid var(--color-border);
 		background: var(--color-surface-raised);
 		color: var(--color-text);
+		font-size: 0.85rem;
+	}
+
+	.cog-btn span {
 		font-size: 1rem;
 	}
 
@@ -848,12 +896,19 @@
 	}
 
 	.copy-link-btn {
-		width: 2.25rem;
-		height: 2.25rem;
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		height: 2.5rem;
+		padding: 0 0.75rem;
 		border-radius: 0.375rem;
 		border: 1px solid var(--color-border);
 		background: var(--color-surface-raised);
 		color: var(--color-text);
+		font-size: 0.85rem;
+	}
+
+	.copy-link-btn span {
 		font-size: 1rem;
 	}
 
@@ -871,13 +926,16 @@
 	.clear-btn {
 		position: relative;
 		overflow: hidden;
-		width: 2.25rem;
-		height: 2.25rem;
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		height: 2.5rem;
+		padding: 0 0.75rem;
 		border-radius: 0.375rem;
 		border: 1px solid var(--color-danger, #b8433a);
 		background: var(--color-surface);
 		color: var(--color-text);
-		font-size: 1rem;
+		font-size: 0.85rem;
 	}
 
 	.clear-btn-fill {
@@ -894,6 +952,12 @@
 	}
 
 	.clear-btn-icon {
+		position: relative;
+		z-index: 1;
+		font-size: 1rem;
+	}
+
+	.clear-btn-label {
 		position: relative;
 		z-index: 1;
 	}
@@ -1010,7 +1074,7 @@
 	}
 
 	.control-btn {
-		width: 1rem;
+		width: 2.25rem;
 		height: 1.75rem;
 		border-radius: 0.375rem;
 		border: 1px solid var(--color-border);
@@ -1062,12 +1126,15 @@
 	.page-nav {
 		display: flex;
 		align-items: center;
-		gap: 0.75rem;
+		gap: 0.35rem;
+		padding: 0.25rem;
+		border-radius: 0.5rem;
+		background: color-mix(in srgb, var(--color-accent) 50%, transparent);
 	}
 
-	/* Below the toolbar, own centered row - the default (portrait) position. */
+	/* Below the header, own centered row - the default (portrait) position. */
 	.page-nav-inline {
-		margin-top: 1rem;
+		margin-top: 0.5rem;
 		justify-content: center;
 	}
 
@@ -1098,19 +1165,24 @@
 	}
 
 	.page-nav-label {
-		min-width: 6rem;
+		min-width: 4.25rem;
 		text-align: center;
-		font-size: 0.9rem;
+		font-size: 0.8rem;
 		color: var(--color-text);
 	}
 
-	/* Wider than the default .control-btn (used by the compact +/- steppers)
+	/* Taller than the default .control-btn (used by the compact +/- steppers)
 	   since these are the primary way to move around a multi-page pattern and
 	   get pressed far more often - worth a bigger, easier-to-hit target. */
 	.page-nav-btn {
-		width: 2.75rem;
-		height: 2.25rem;
-		font-size: 1.1rem;
+		width: 2.25rem;
+		height: 2.5rem;
+		padding: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		line-height: 1;
+		font-size: 1rem;
 	}
 
 	.rows {

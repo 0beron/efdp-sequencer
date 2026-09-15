@@ -28,9 +28,12 @@ export class SequencerEngine {
 	currentSteps = $state<Record<string, number>>({});
 	playing = $state(false);
 	bpm = $state(120);
-	// Declared overall pattern length. Purely an editing/paging concept in v1 -
-	// playback still wraps each row independently at its own `row.length`
-	// (see onPulse below), so this has no effect on what actually plays.
+	// Reference length shown in the UI, tracking the total step count as a
+	// single number even though each row wraps independently at its own
+	// `row.length` (see onPulse below). The stepper controls in +page.svelte
+	// that change this also nudge every row's own length by the same amount,
+	// so this value stays a meaningful "current length" without collapsing
+	// rows' individual drift back to a uniform value on every change.
 	sequenceLength = $state(16);
 
 	private pulse = 0;

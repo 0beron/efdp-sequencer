@@ -42,6 +42,10 @@ export interface Row {
 	// 0 means "None" (no choking across rows). Any other value chokes (immediately
 	// stops) samples on every other row sharing the same non-zero choke group.
 	chokeGroup: number;
+	// Silences the row's output without touching its gain fader - a live
+	// performance toggle, not pattern data, so clearing/resetting a row leaves
+	// it untouched.
+	muted: boolean;
 }
 
 export function totalSubsteps(row: Pick<Row, 'length' | 'subdivision'>): number {
@@ -96,7 +100,8 @@ export function createRow(options: {
 		lowpassResonance: 0,
 		highpassCutoff: 0,
 		highpassResonance: 0,
-		chokeGroup: 0
+		chokeGroup: 0,
+		muted: false
 	};
 }
 
@@ -154,6 +159,10 @@ export function setHighpassResonance(row: Row, value: number): void {
 
 export function setChokeGroup(row: Row, value: number): void {
 	row.chokeGroup = Math.max(0, Math.round(value));
+}
+
+export function toggleMute(row: Row): void {
+	row.muted = !row.muted;
 }
 
 // Fader values are normalized 0..1; these scale them to actual envelope times.

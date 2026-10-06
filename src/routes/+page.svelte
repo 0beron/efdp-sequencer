@@ -42,6 +42,45 @@
 	let forceWide = $state(browser ? localStorage.getItem(FORCE_WIDE_KEY) === 'true' : false);
 	let settingsOpen = $state(false);
 
+	// Static informational pages, reachable from the settings panel - a
+	// separate overlay (not another settings tab) since it's just paged
+	// static content with its own back/forward nav rather than a settings
+	// control.
+	// The page markup lives in hand-editable files at src/lib/info/*.html,
+	// shown in filename order (page-1.html, page-2.html, ...); name them with
+	// zero-padded numbers (page-01 ...) if there are ever more than 9.
+	const INFO_HTML = import.meta.glob('$lib/info/*.html', {
+		query: '?raw',
+		import: 'default',
+		eager: true
+	}) as Record<string, string>;
+	const INFO_PAGES = Object.keys(INFO_HTML)
+		.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+		// Root-relative src/href values (e.g. src="/img/foo.png", which is
+		// static/img/foo.png) are rewritten through asset() so they keep
+		// working if the site is served from a sub-path.
+		.map((path) => ({
+			html: INFO_HTML[path].replace(
+				/\b(src|href)="\/(?!\/)([^"]*)"/g,
+				(_, attr, rest) => `${attr}="${asset('/' + rest)}"`
+			)
+		}));
+	let infoOpen = $state(false);
+	let infoPage = $state(0);
+
+	function openInfo() {
+		infoPage = 0;
+		infoOpen = true;
+	}
+
+	function infoBack() {
+		infoPage = Math.max(0, infoPage - 1);
+	}
+
+	function infoForward() {
+		infoPage = Math.min(INFO_PAGES.length - 1, infoPage + 1);
+	}
+
 	// Display preference (like forceWide), not a one-off broadcast: persisted
 	// so it stays put across reloads instead of resetting to the default.
 	const GRID_MARKER_KEY = 'efdp-grid-marker-every';
@@ -432,7 +471,9 @@
 
 <svelte:window
 	onkeydown={(e) => {
-		if (e.key === 'Escape' && settingsOpen) settingsOpen = false;
+		if (e.key !== 'Escape') return;
+		if (infoOpen) infoOpen = false;
+		else if (settingsOpen) settingsOpen = false;
 	}}
 />
 
@@ -740,6 +781,10 @@
 					</div>
 				</section>
 
+				<button type="button" class="info-btn" aria-label="Open info pages" onclick={openInfo}>
+					Slides
+				</button>
+
 				<button
 					type="button"
 					class="full-reset-btn"
@@ -753,6 +798,51 @@
 					<span class="full-reset-btn-fill"></span>
 					<span class="full-reset-btn-label">Hold to fully reset</span>
 				</button>
+			</div>
+		</div>
+	{/if}
+
+	{#if infoOpen}
+		<div class="overlay" role="dialog" aria-modal="true" aria-label="Info">
+			<div class="overlay-panel bounded-panel">
+				<header>
+					<h2>Slides</h2>
+					<button
+						type="button"
+						class="close-btn"
+						aria-label="Close info"
+						onclick={() => (infoOpen = false)}
+					>
+						✕
+					</button>
+				</header>
+
+				<div class="info-nav">
+					<button
+						type="button"
+						class="control-btn page-nav-btn"
+						disabled={infoPage === 0}
+						aria-label="Previous info page"
+						onclick={infoBack}
+					>
+						‹
+					</button>
+					<span class="page-nav-label">Page {infoPage + 1} / {INFO_PAGES.length}</span>
+					<button
+						type="button"
+						class="control-btn page-nav-btn"
+						disabled={infoPage === INFO_PAGES.length - 1}
+						aria-label="Next info page"
+						onclick={infoForward}
+					>
+						›
+					</button>
+				</div>
+
+				<div class="info-content">
+					<!-- eslint-disable-next-line svelte/no-at-html-tags -- trusted, repo-authored files -->
+					{@html INFO_PAGES[infoPage].html}
+				</div>
 			</div>
 		</div>
 	{/if}
@@ -966,6 +1056,53 @@
 	   labeled since it lives in the settings list rather than the toolbar -
 	   and set apart with margin since it's the most destructive action here,
 	   wiping the pattern *and* every other setting in this panel. */
+	.info-btn {
+		width: 100%;
+		height: 2.5rem;
+		margin-top: 1.5rem;
+		border-radius: 0.375rem;
+		border: 1px solid var(--color-border);
+		background: var(--color-surface-raised);
+		color: var(--color-text);
+		font-size: 0.9rem;
+	}
+
+	.info-btn:hover {
+		background: var(--color-surface);
+	}
+
+	.info-content {
+		margin-top: 1rem;
+		min-height: 8rem;
+		font-size: 1rem;
+		color: var(--color-text);
+	}
+
+	/* Scoped styles don't reach {@html} content, so target it via :global. */
+	.info-content :global(h3) {
+		margin: 0 0 0.5rem;
+	}
+
+	.info-content :global(img) {
+		display: block;
+		max-width: 75%;
+		height: auto;
+		margin-left: auto;
+		margin-right: auto;
+	}
+
+	.info-content :global(p) {
+		margin: 0 0 0.75rem;
+	}
+
+	.info-nav {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.5rem;
+		margin-top: 1rem;
+	}
+
 	.full-reset-btn {
 		position: relative;
 		overflow: hidden;

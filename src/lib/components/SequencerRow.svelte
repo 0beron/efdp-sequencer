@@ -19,6 +19,7 @@
 		setHighpassCutoff,
 		setHighpassResonance,
 		setChokeGroup,
+		toggleMute,
 		normalizedToFilterFrequency,
 		normalizedToFilterQ,
 		getVelocity,
@@ -296,15 +297,27 @@
 />
 
 <div class="row">
-	<button
-		type="button"
-		class="row-name"
-		use:fitText
-		aria-label={`${row.name} settings`}
-		onclick={() => setOverlay(defaultOverlayKind)}
-	>
-		{row.name}
-	</button>
+	<div class="row-header">
+		<button
+			type="button"
+			class="row-name"
+			use:fitText
+			aria-label={`${row.name} settings`}
+			onclick={() => setOverlay(defaultOverlayKind)}
+		>
+			{row.name}
+		</button>
+		<button
+			type="button"
+			class="mute-btn"
+			class:active={row.muted}
+			aria-label={`${row.muted ? 'Unmute' : 'Mute'} ${row.name}`}
+			aria-pressed={row.muted}
+			onclick={() => toggleMute(row)}
+		>
+			M
+		</button>
+	</div>
 
 	<div class="steps-wrap" style={colsStyle}>
 		<div class="step-markers" aria-hidden="true">
@@ -733,6 +746,59 @@
 		width: 2.25rem;
 	}
 
+	/* Portrait (default): stacked column so the mute button sits under the
+	   row-name/overlay button instead of widening the row. Landscape below
+	   flips this back to side-by-side, with .mute-btn's order moving it to
+	   the left of row-name to match the original side-by-side layout. */
+	.row-header {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.35rem;
+		flex-shrink: 0;
+	}
+
+	@media (orientation: landscape) {
+		.row-header {
+			flex-direction: row;
+			gap: 0.5rem;
+		}
+	}
+
+	:global(.force-wide) .row-header {
+		flex-direction: row;
+		gap: 0.5rem;
+	}
+
+	.mute-btn {
+		width: 1.75rem;
+		height: 1.75rem;
+		flex-shrink: 0;
+		border-radius: 0.375rem;
+		border: 1px solid var(--color-border);
+		background: var(--color-surface);
+		color: var(--color-text);
+		font-size: 0.9rem;
+		line-height: 1;
+		padding: 0;
+	}
+
+	@media (orientation: landscape) {
+		.mute-btn {
+			order: -1;
+		}
+	}
+
+	:global(.force-wide) .mute-btn {
+		order: -1;
+	}
+
+	.mute-btn.active {
+		background: var(--color-danger, #b8433a);
+		border-color: var(--color-danger, #b8433a);
+		color: #fff;
+	}
+
 	.row-name {
 		width: 4.5rem;
 		height: 1.75rem;
@@ -894,10 +960,10 @@
 			grid-template-columns: repeat(var(--wide-cols, 16), 1fr);
 			/* Left offset of .steps within .row (5rem: row-name 4.5rem + one
 			   0.5rem row gap), minus the overlay-switcher's own footprint
-			   (1.75rem button + 0.5rem gap) since the switcher sits to the left
+			   (2.625rem button + 0.5rem gap) since the switcher sits to the left
 			   of .overlay-content and already accounts for that much of the
 			   offset. */
-			padding-left: 2.75rem;
+			padding-left: 1.875rem;
 			gap: 0.35rem;
 		}
 	}
@@ -905,7 +971,7 @@
 	/* See the .steps override above. */
 	:global(.force-wide) .step-grid {
 		grid-template-columns: repeat(var(--wide-cols, 16), 1fr);
-		padding-left: 2.75rem;
+		padding-left: 1.875rem;
 		gap: 0.35rem;
 	}
 
@@ -943,7 +1009,7 @@
 
 	/* Fixed-width sidebar so it never eats into the content column's width -
 	   the step-grid's landscape padding-left above is computed assuming this
-	   stays exactly button-width (1.75rem) + the panel's 0.5rem gap. */
+	   stays exactly button-width (2.625rem) + the panel's 0.5rem gap. */
 	.overlay-switcher {
 		display: flex;
 		flex-direction: column;
@@ -952,13 +1018,13 @@
 	}
 
 	.switcher-btn {
-		width: 1.75rem;
-		height: 1.75rem;
+		width: 2.625rem;
+		height: 2.625rem;
 		border-radius: 0.375rem;
 		border: 1px solid var(--color-border);
 		background: var(--color-surface);
 		color: var(--color-text);
-		font-size: 0.85rem;
+		font-size: 1.275rem;
 		line-height: 1;
 		padding: 0;
 	}
@@ -977,6 +1043,7 @@
 
 	.overlay-content header {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		justify-content: space-between;
 		margin-bottom: 1rem;
@@ -987,17 +1054,36 @@
 		align-items: center;
 		gap: 0.75rem;
 		min-width: 0;
+		flex-basis: 100%;
 	}
 
 	.overlay-nav-btn {
+		width: 3rem;
 		flex-shrink: 0;
 	}
 
+	/* Portrait only (see the landscape override below): the page nav and
+	   delete button (plus the close button riding along with them) wrap onto
+	   their own row below the row-nav/title row, instead of squeezing into
+	   the same row as the back/forward arrows on a narrow phone width. */
 	.header-actions {
 		display: flex;
 		align-items: center;
+		justify-content: flex-end;
 		gap: 0.75rem;
 		flex-shrink: 0;
+		flex-basis: 100%;
+	}
+
+	@media (orientation: landscape) {
+		.overlay-content header {
+			flex-wrap: nowrap;
+		}
+
+		.header-title,
+		.header-actions {
+			flex-basis: auto;
+		}
 	}
 
 	.compact-page-nav {

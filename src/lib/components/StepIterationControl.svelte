@@ -65,6 +65,7 @@
 
 <style>
 	.iteration-control {
+		container-type: inline-size;
 		width: 100%;
 		height: 100%;
 		min-width: 0;
@@ -82,6 +83,7 @@
 
 	.iteration-stepper {
 		flex: 1;
+		min-width: 0;
 		min-height: 0;
 		display: flex;
 		flex-direction: column;
@@ -93,11 +95,14 @@
 	/* flex: 1 1 0 (rather than the old flex: 0 0 auto) lets each button grow to
 	   fill its half of the cell's available height instead of sizing to its
 	   glyph's line-height - width stays 100% either way, so this only grows
-	   the tap target vertically, matching the narrow-column constraint. */
+	   the tap target vertically, matching the narrow-column constraint. Their
+	   share shrinks as .iteration-value's larger font claims more of the
+	   stepper's fixed height, down to min-height - below that the control
+	   grows past the grid cell rather than crushing the buttons further. */
 	.iteration-btn {
 		width: 100%;
 		flex: 1 1 0;
-		min-height: 0;
+		min-height: 1rem;
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -105,7 +110,7 @@
 		border-radius: 0.25rem;
 		background: var(--color-accent);
 		color: var(--color-bg);
-		font-size: 0.75rem;
+		font-size: 0.65rem;
 		line-height: 1;
 		padding: 0;
 	}
@@ -114,16 +119,36 @@
 		opacity: 0.3;
 	}
 
+	/* Floor is roughly double the old fixed 0.75rem - the previous clamp's
+	   floor matched the old size exactly, so on narrow columns (where cqw
+	   resolves below it) it was silently clamping back down to the original
+	   size. The cqw term still lets it scale up further on wide columns; the
+	   overflow/nowrap below is what guarantees the horizontal grid layout
+	   can't be pushed around if a column is ever narrower than the digits
+	   need. Vertical padding eats a bit more of the stepper's height, which
+	   is what shrinks the buttons above/below it further. */
 	.iteration-value {
 		flex: 0 0 auto;
-		font-size: 0.75rem;
+		min-width: 0;
+		font-size: clamp(1.4rem, 34cqw, 2rem);
+		font-weight: 600;
+		line-height: 1.15;
+		padding-block: 0.2rem;
 		text-align: center;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: clip;
 	}
 
 	.iteration-divider {
 		flex: 0 0 auto;
-		font-size: 0.85rem;
+		min-width: 0;
+		font-size: clamp(1rem, 26cqw, 1.5rem);
+		padding-block: 0.15rem;
 		text-align: center;
 		opacity: 0.7;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: clip;
 	}
 </style>

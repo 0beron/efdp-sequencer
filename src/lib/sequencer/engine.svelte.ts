@@ -207,6 +207,7 @@ export class SequencerEngine {
 			const trigger = voice.row.triggers[idx];
 			if (
 				trigger?.active &&
+				!voice.row.muted &&
 				this.reachedIteration(voice.row.id, idx, trigger) &&
 				Math.random() < trigger.probability
 			) {
